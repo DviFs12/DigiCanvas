@@ -89,10 +89,33 @@ export class DigiPeer {
     this._setState(ConnState.CONNECTING);
 
     this.signaling = new SignalingChannel(this.code, 'guest');
-    await this.signaling.init();
 
-    const exists = await this.signaling.sessionExists();
-    if (!exists) throw new Error('Sessão não encontrada. Verifique o código.');
+    try {
+      await this.signaling.init();
+    } catch (err) {
+      this._setState(ConnState.ERROR);
+      throw err; // erro de configuração (apiKey, databaseURL) — repassa limpo
+    }
+
+    let exists = false;
+    try {
+      exists = await this.signaling.sessionExists();
+    } catch (err) {
+      this._setState(ConnState.ERROR);
+      throw new Error('Erro ao acessar o Firebase: ' + err.message);
+    }
+
+    if (!exists) {
+      this._setState(ConnState.ERROR);
+      throw new Error(
+        `Sessão "${this.code}" não encontrada.\n` +
+        'Possíveis causas:\n' +
+        '  1. Código digitado errado\n' +
+        '  2. O computador ainda não clicou em "Gerar Código"\n' +
+        '  3. databaseURL em firebase-config.js aponta para banco diferente\n' +
+        '  4. Regras do RTDB não permitem leitura — verifique o console Firebase'
+      );
+    }
 
     this.pc = this._createPC();
 
@@ -106,14 +129,19 @@ export class DigiPeer {
     const stopOfferListener = this.signaling.onOffer(async (offerData) => {
       if (this.pc.remoteDescription) return;
 
-      const offer = new RTCSessionDescription(offerData);
-      await this.pc.setRemoteDescription(offer);
+      try {
+        const offer = new RTCSessionDescription(offerData);
+        await this.pc.setRemoteDescription(offer);
 
-      const answer = await this.pc.createAnswer();
-      await this.pc.setLocalDescription(answer);
-      await this.signaling.sendAnswer({ type: answer.type, sdp: answer.sdp });
+        const answer = await this.pc.createAnswer();
+        await this.pc.setLocalDescription(answer);
+        await this.signaling.sendAnswer({ type: answer.type, sdp: answer.sdp });
 
-      stopOfferListener?.();
+        stopOfferListener?.();
+      } catch (err) {
+        console.error('[WebRTC] Erro ao processar offer:', err);
+        this._setState(ConnState.ERROR);
+      }
     });
 
     // Ouve ICE candidates do host
