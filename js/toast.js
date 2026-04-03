@@ -1,7 +1,5 @@
 /**
- * toast.js
- * ────────
- * Sistema leve de notificações toast.
+ * toast.js — Sistema de notificações + loading states
  */
 
 let container = null;
@@ -15,22 +13,34 @@ function getContainer() {
   return container;
 }
 
-/**
- * Exibe uma notificação toast.
- * @param {string} message  Texto da mensagem
- * @param {'info'|'success'|'error'} type  Tipo visual
- * @param {number} duration  Duração em ms (padrão: 3000)
- */
 export function toast(message, type = 'info', duration = 3000) {
   const c  = getContainer();
   const el = document.createElement('div');
   el.className   = `toast ${type}`;
   el.textContent = message;
   c.appendChild(el);
-
   setTimeout(() => {
+    el.style.animation = 'toast-out 0.3s ease forwards';
     el.addEventListener('animationend', () => el.remove(), { once: true });
-    // Se a animação não disparar (ex: visibilidade oculta), remove manualmente
     setTimeout(() => el.remove(), 400);
   }, duration);
+}
+
+// ── Loading overlay leve ───────────────────────────────────────────────────
+
+let loadingEl = null;
+
+export function showLoading(msg = 'Carregando…') {
+  if (!loadingEl) {
+    loadingEl = document.createElement('div');
+    loadingEl.id = 'loading-overlay';
+    loadingEl.innerHTML = `<div class="loading-box"><div class="spinner"></div><span id="loading-msg"></span></div>`;
+    document.body.appendChild(loadingEl);
+  }
+  loadingEl.querySelector('#loading-msg').textContent = msg;
+  loadingEl.classList.add('visible');
+}
+
+export function hideLoading() {
+  loadingEl?.classList.remove('visible');
 }
