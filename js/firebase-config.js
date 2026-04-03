@@ -13,13 +13,13 @@
 // │  SUBSTITUA ESTES VALORES PELAS SUAS CREDENCIAIS DO FIREBASE             │
 // └─────────────────────────────────────────────────────────────────────────┘
 export const FIREBASE_CONFIG = {
-  apiKey:            "YOUR_API_KEY",
-  authDomain:        "YOUR_PROJECT.firebaseapp.com",
-  databaseURL:       "https://YOUR_PROJECT-default-rtdb.firebaseio.com",
-  projectId:         "YOUR_PROJECT",
-  storageBucket:     "YOUR_PROJECT.appspot.com",
-  messagingSenderId: "YOUR_SENDER_ID",
-  appId:             "YOUR_APP_ID",
+  apiKey:            "AIzaSyCyJa0sf4E1AJo9S2J0NWbx-f2eFuymE-A",
+  authDomain:        "digicanvas-prod.firebaseapp.com",
+  databaseURL:       "https://digicanvas-prod-default-rtdb.firebaseio.com",
+  projectId:         "digicanvas-prod",
+  storageBucket:     "digicanvas-prod.firebasestorage.app",
+  messagingSenderId: "558187707397",
+  appId:             "1:558187707397:web:30edb68e4442df017fb06c",
 };
 
 // Modo offline para testes locais sem Firebase real
