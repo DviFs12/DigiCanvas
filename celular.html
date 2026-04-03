@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="theme-color" content="#0d0d0f" />
+  <title>DigiCanvas — Celular</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="icon" type="image/png" href="icons/favicon-32.png" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
+  <link rel="stylesheet" href="css/shared.css" />
+  <link rel="stylesheet" href="css/mobile.css" />
+</head>
+<body class="mobile-mode">
+
+  <!-- ── TELA DE CONEXÃO ── -->
+  <div id="screen-connect" class="screen active">
+    <div class="mobile-bg">
+      <div class="glow-orb orb-mobile"></div>
+    </div>
+    <div class="connect-content">
+      <div class="logo-mark small">
+        <svg viewBox="0 0 60 60" fill="none"><rect x="4" y="4" width="52" height="52" rx="8" stroke="var(--accent)" stroke-width="2"/><path d="M16 44 L28 20 L34 32 L40 24 L46 44" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="46" cy="16" r="5" fill="var(--accent2)" opacity="0.8"/></svg>
+      </div>
+      <h1>DigiCanvas</h1>
+      <p class="subtitle">Mesa digitalizadora</p>
+
+      <div class="code-input-section">
+        <label class="input-label">Código da sessão (6 dígitos)</label>
+        <div class="code-inputs">
+          <input type="text" maxlength="1" class="code-char" inputmode="numeric" pattern="[0-9]" />
+          <input type="text" maxlength="1" class="code-char" inputmode="numeric" pattern="[0-9]" />
+          <input type="text" maxlength="1" class="code-char" inputmode="numeric" pattern="[0-9]" />
+          <span class="code-sep">–</span>
+          <input type="text" maxlength="1" class="code-char" inputmode="numeric" pattern="[0-9]" />
+          <input type="text" maxlength="1" class="code-char" inputmode="numeric" pattern="[0-9]" />
+          <input type="text" maxlength="1" class="code-char" inputmode="numeric" pattern="[0-9]" />
+        </div>
+
+        <button id="btn-connect" class="btn-primary full" disabled>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+          Conectar
+        </button>
+
+        <div id="connect-status" class="connect-status">
+          <span id="connect-msg"></span>
+        </div>
+      </div>
+
+      <div class="connect-note">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        Abra <strong>index.html</strong> no computador e clique em "Gerar Código"
+      </div>
+    </div>
+  </div>
+
+  <!-- ── TELA DE DESENHO ── -->
+  <div id="screen-draw" class="screen">
+
+    <!-- Top HUD -->
+    <div id="mobile-hud">
+      <div class="hud-left">
+        <div id="mobile-status-dot" class="status-dot connected"></div>
+        <span id="mobile-status-text">Conectado</span>
+      </div>
+      <div class="hud-center">
+        <span id="mobile-mode-label">Desenho</span>
+      </div>
+      <div class="hud-right">
+        <button id="btn-mobile-menu" class="icon-btn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- Canvas de desenho principal -->
+    <canvas id="mobile-canvas"></canvas>
+
+    <!-- Barra de ferramentas inferior -->
+    <div id="mobile-toolbar">
+      <div class="tool-row">
+        <button class="mob-tool active" data-tool="pen" title="Caneta">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/></svg>
+        </button>
+        <button class="mob-tool" data-tool="marker" title="Marcador">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25z"/><path d="M20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+        </button>
+        <button class="mob-tool" data-tool="eraser" title="Borracha">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 20H7L3 16l10-10 7 7-3 4"/></svg>
+        </button>
+        <div class="separator-v"></div>
+        <button class="mob-tool" data-tool="pan" title="Mover viewport" id="btn-pan-mode">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 9l-3 3 3 3M9 5l3-3 3 3M15 19l-3 3-3-3M19 9l3 3-3 3M2 12h20M12 2v20"/></svg>
+        </button>
+      </div>
+
+      <div class="options-row">
+        <input type="color" id="mob-color" value="#e63946" />
+        <div class="mob-sizes">
+          <button class="mob-size active" data-size="2">·</button>
+          <button class="mob-size" data-size="5">•</button>
+          <button class="mob-size" data-size="10">●</button>
+        </div>
+        <button id="btn-mob-undo" class="icon-btn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg>
+        </button>
+        <button id="btn-mob-clear" class="icon-btn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- Menu deslizante -->
+    <div id="mobile-menu" class="side-menu hidden">
+      <div class="menu-header">
+        <span>Configurações</span>
+        <button id="btn-close-menu" class="icon-btn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="menu-body">
+        <label class="toggle-row">
+          <span>Haptic feedback</span>
+          <input type="checkbox" id="toggle-haptic" checked />
+          <span class="toggle-knob"></span>
+        </label>
+        <label class="toggle-row">
+          <span>Modo palm-reject</span>
+          <input type="checkbox" id="toggle-palm" checked />
+          <span class="toggle-knob"></span>
+        </label>
+        <div class="menu-section">
+          <span class="section-label">Sensibilidade pan</span>
+          <input type="range" id="pan-sensitivity" min="0.3" max="2" step="0.1" value="1" />
+        </div>
+        <button id="btn-mob-disconnect" class="btn-danger full mt">Desconectar</button>
+      </div>
+    </div>
+
+  </div>
+
+  <script type="module" src="js/firebase-config.js"></script>
+  <script type="module" src="js/signaling.js"></script>
+  <script type="module" src="js/webrtc.js"></script>
+  <script type="module" src="js/toast.js"></script>
+  <script type="module" src="js/mobile.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./service-worker.js')
+          .then(reg => console.log('[PWA] Service Worker registrado:', reg.scope))
+          .catch(err => console.warn('[PWA] SW falhou:', err));
+      });
+    }
+  </script>
+</body>
+</html>
