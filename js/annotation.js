@@ -1,49 +1,75 @@
 /**
- * annotation.js
- * ─────────────
- * Motor de anotação vetorial para o canvas do desktop.
- * Gerencia traços locais e remotos.
- * Exporta strokes como PNG.
+ * annotation.js  (v3 — coordenadas normalizadas)
+ * ─────────────────────────────────────────────────
+ * Motor de anotação do desktop.
+ *
+ * ARQUITETURA:
+ *  - Traços locais (mouse/touch no desktop) são convertidos para
+ *    coordenadas NORMALIZADAS (0–1) antes de enviar ao celular.
+ *  - Traços remotos chegam em coordenadas normalizadas e são
+ *    convertidos para px do canvas no momento do desenho.
+ *  - Isso garante que os traços ficam fixos no PDF independente
+ *    de zoom, resize ou troca de página.
+ *
+ * HISTÓRICO:
+ *  Armazena strokes como vetores de pontos normalizados.
+ *  O undo redesenha do zero (sem ImageData) — correto para qualquer tamanho.
+ *
+ * STROKES REMOTOS:
+ *  Ficam num canvas separado (remoteCanvas) sobrepostos ao PDF.
+ *  Ambos os canvas têm as mesmas dimensões que o pdfCanvas.
  */
 
 export class AnnotationEngine {
-  constructor(localCanvas, remoteCanvas) {
-    this.lCanvas = localCanvas;
-    this.rCanvas = remoteCanvas;
-    this.lCtx    = localCanvas.getContext('2d');
-    this.rCtx    = remoteCanvas.getContext('2d');
+  /**
+   * @param {HTMLCanvasElement} localCanvas   — anotações do desktop
+   * @param {HTMLCanvasElement} remoteCanvas  — anotações do celular
+   * @param {() => {w:number, h:number}} getPdfSize  — retorna dimensões atuais do PDF em px
+   */
+  constructor(localCanvas, remoteCanvas, getPdfSize) {
+    this.lCanvas    = localCanvas;
+    this.rCanvas    = remoteCanvas;
+    this.lCtx       = localCanvas.getContext('2d');
+    this.rCtx       = remoteCanvas.getContext('2d');
+    this.getPdfSize = getPdfSize; // () => { w, h }
 
-    // Estado do desenho
+    // Ferramentas
     this.tool    = 'pen';
     this.color   = '#e63946';
     this.size    = 2;
-    this.opacity = 1;
 
-    this.drawing   = false;
-    this.startX    = 0;
-    this.startY    = 0;
+    this.drawing = false;
+    this.startNX = 0;  // para ferramentas de forma (line, rect)
+    this.startNY = 0;
 
-    // Histórico para undo (máx 30 estados)
-    this.history   = [];
-    this.MAX_HIST  = 30;
+    // Histórico vetorial (normalizado) — permite undo sem ImageData
+    // Cada entrada: { tool, color, size, points: [{nx,ny}] }
+    this.strokes  = [];
+    this.MAX_HIST = 40;
 
-    // Snapshot para formas em andamento
+    // Snapshot do contexto local para formas em andamento (line/rect)
     this._snapshot = null;
 
-    // Remoto
-    this.showRemote = true;
-    this._remoteStrokes = {}; // id -> pontos em andamento
+    // Traços remotos em andamento (id → objeto stroke)
+    this.showRemote     = true;
+    this._remoteStrokes = {};
 
+    // Callbacks
+    this.onStrokeStart = null;
+    this.onStrokeMove  = null;
+    this.onStrokeEnd   = null;
+
+    this._activeStroke = null; // stroke local em andamento
     this._bindEvents();
   }
 
-  // ── Configuração ──────────────────────────────────────────────────────────
+  // ── Configuração ────────────────────────────────────────────────────────
 
-  setTool(tool)  { this.tool  = tool; }
-  setColor(c)    { this.color = c; }
-  setSize(s)     { this.size  = s; }
+  setTool(t)  { this.tool  = t; }
+  setColor(c) { this.color = c; }
+  setSize(s)  { this.size  = s; }
 
-  // ── Eventos do Mouse ──────────────────────────────────────────────────────
+  // ── Eventos mouse/touch ─────────────────────────────────────────────────
 
   _bindEvents() {
     const c = this.lCanvas;
@@ -51,171 +77,221 @@ export class AnnotationEngine {
     c.addEventListener('mousemove',  this._onMove.bind(this));
     c.addEventListener('mouseup',    this._onUp.bind(this));
     c.addEventListener('mouseleave', this._onUp.bind(this));
-
-    c.addEventListener('touchstart', this._onTouchStart.bind(this), { passive: false });
-    c.addEventListener('touchmove',  this._onTouchMove.bind(this),  { passive: false });
-    c.addEventListener('touchend',   this._onTouchEnd.bind(this));
+    c.addEventListener('touchstart', e => { e.preventDefault(); if (e.touches.length === 1) this._onDown({ clientX: e.touches[0].clientX, clientY: e.touches[0].clientY }); }, { passive: false });
+    c.addEventListener('touchmove',  e => { e.preventDefault(); if (e.touches.length === 1) this._onMove({ clientX: e.touches[0].clientX, clientY: e.touches[0].clientY }); }, { passive: false });
+    c.addEventListener('touchend',   e => this._onUp(e));
   }
 
-  _getPos(e) {
+  /** Converte evento de mouse/touch para coordenadas normalizadas */
+  _evToNorm(e) {
     const rect = this.lCanvas.getBoundingClientRect();
-    const scaleX = this.lCanvas.width  / rect.width;
-    const scaleY = this.lCanvas.height / rect.height;
+    // Coordenadas CSS relativas ao canvas
+    const cx = (e.clientX - rect.left);
+    const cy = (e.clientY - rect.top);
+    // Normaliza pelo tamanho do canvas (que é igual ao PDF renderizado)
     return {
-      x: (e.clientX - rect.left) * scaleX,
-      y: (e.clientY - rect.top)  * scaleY,
+      nx: cx / rect.width,
+      ny: cy / rect.height,
+    };
+  }
+
+  /** Converte coordenada normalizada para px do canvas */
+  _normToPx(nx, ny) {
+    return {
+      x: nx * this.lCanvas.width,
+      y: ny * this.lCanvas.height,
     };
   }
 
   _onDown(e) {
-    const { x, y } = this._getPos(e);
+    const { nx, ny } = this._evToNorm(e);
     this.drawing = true;
-    this.startX  = x;
-    this.startY  = y;
-    this._lastX  = x;
-    this._lastY  = y;
+    this.startNX = nx;
+    this.startNY = ny;
 
-    this._saveSnapshot();
-
-    if (this.tool === 'pen' || this.tool === 'marker' || this.tool === 'eraser') {
-      this.lCtx.beginPath();
-      this.lCtx.moveTo(x, y);
+    if (this.tool === 'line' || this.tool === 'rect') {
+      this._saveSnapshot();
     }
 
-    this.onStrokeStart?.({ tool: this.tool, color: this.color, size: this.size, x, y });
+    // Inicia stroke vetorial local
+    this._activeStroke = { tool: this.tool, color: this.color, size: this.size, points: [{ nx, ny }] };
+    this.strokes.push(this._activeStroke);
+    if (this.strokes.length > this.MAX_HIST) this.strokes.shift();
+
+    this.onStrokeStart?.({ tool: this.tool, color: this.color, size: this.size, nx, ny });
   }
 
   _onMove(e) {
     if (!this.drawing) return;
-    const { x, y } = this._getPos(e);
-    this._drawSegment(x, y);
-    this._lastX = x;
-    this._lastY = y;
-    this.onStrokeMove?.({ x, y });
+    const { nx, ny } = this._evToNorm(e);
+    this._activeStroke?.points.push({ nx, ny });
+    this._drawActiveSegment(nx, ny);
+    this.onStrokeMove?.({ nx, ny });
   }
 
-  _onUp(e) {
+  _onUp() {
     if (!this.drawing) return;
     this.drawing = false;
-    this._pushHistory();
+    this._activeStroke = null;
+    this._snapshot = null;
     this.onStrokeEnd?.();
   }
 
-  // Touch
-  _onTouchStart(e) {
-    e.preventDefault();
-    if (e.touches.length === 1) {
-      this._onDown({ clientX: e.touches[0].clientX, clientY: e.touches[0].clientY });
-    }
-  }
+  // ── Renderização de segmento ativo ──────────────────────────────────────
 
-  _onTouchMove(e) {
-    e.preventDefault();
-    if (e.touches.length === 1) {
-      this._onMove({ clientX: e.touches[0].clientX, clientY: e.touches[0].clientY });
-    }
-  }
-
-  _onTouchEnd(e) { this._onUp(e); }
-
-  // ── Desenho ────────────────────────────────────────────────────────────────
-
-  _drawSegment(x, y) {
+  _drawActiveSegment(nx, ny) {
     const ctx = this.lCtx;
+    const pts = this._activeStroke?.points ?? [];
+    const prev = pts.length >= 2 ? pts[pts.length - 2] : null;
 
-    if (this.tool === 'eraser') {
-      ctx.globalCompositeOperation = 'destination-out';
-      ctx.lineWidth = this.size * 4;
-      ctx.strokeStyle = 'rgba(0,0,0,1)';
-    } else {
-      ctx.globalCompositeOperation = 'source-over';
-      ctx.strokeStyle = this.color;
-      ctx.lineWidth   = this.tool === 'marker' ? this.size * 3 : this.size;
-      ctx.globalAlpha = this.tool === 'marker' ? 0.4 : 1;
+    if (this.tool === 'line' && prev) {
+      this._restoreSnapshot();
+      const s = this._normToPx(this.startNX, this.startNY);
+      const e = this._normToPx(nx, ny);
+      this._applyStyle(ctx, this.tool, this.color, this.size);
+      ctx.beginPath(); ctx.moveTo(s.x, s.y); ctx.lineTo(e.x, e.y); ctx.stroke();
+      this._resetCtx(ctx);
+      return;
     }
 
+    if (this.tool === 'rect') {
+      this._restoreSnapshot();
+      const s = this._normToPx(this.startNX, this.startNY);
+      const e = this._normToPx(nx, ny);
+      this._applyStyle(ctx, this.tool, this.color, this.size);
+      ctx.strokeRect(s.x, s.y, e.x - s.x, e.y - s.y);
+      this._resetCtx(ctx);
+      return;
+    }
+
+    // pen / marker / eraser — incremental
+    if (prev) {
+      const a = this._normToPx(prev.nx, prev.ny);
+      const b = this._normToPx(nx, ny);
+      this._applyStyle(ctx, this.tool, this.color, this.size);
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+      this._resetCtx(ctx);
+    }
+  }
+
+  _applyStyle(ctx, tool, color, size) {
     ctx.lineCap  = 'round';
     ctx.lineJoin = 'round';
-
-    if (this.tool === 'pen' || this.tool === 'marker' || this.tool === 'eraser') {
-      ctx.lineTo(x, y);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(x, y);
-    } else if (this.tool === 'line') {
-      this._restoreSnapshot();
-      ctx.beginPath();
-      ctx.moveTo(this.startX, this.startY);
-      ctx.lineTo(x, y);
-      ctx.stroke();
-    } else if (this.tool === 'rect') {
-      this._restoreSnapshot();
-      ctx.strokeRect(this.startX, this.startY, x - this.startX, y - this.startY);
+    if (tool === 'eraser') {
+      ctx.globalCompositeOperation = 'destination-out';
+      ctx.strokeStyle = 'rgba(0,0,0,1)';
+      ctx.lineWidth   = size * 4;
+      ctx.globalAlpha = 1;
+    } else {
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.strokeStyle = color;
+      ctx.lineWidth   = tool === 'marker' ? size * 3 : size;
+      ctx.globalAlpha = tool === 'marker' ? 0.4 : 1;
     }
+  }
 
+  _resetCtx(ctx) {
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = 'source-over';
   }
 
-  // ── Histórico ─────────────────────────────────────────────────────────────
+  // ── Snapshot para formas ─────────────────────────────────────────────────
 
   _saveSnapshot() {
     this._snapshot = this.lCtx.getImageData(0, 0, this.lCanvas.width, this.lCanvas.height);
   }
 
   _restoreSnapshot() {
-    if (this._snapshot) {
-      this.lCtx.putImageData(this._snapshot, 0, 0);
-    }
+    if (this._snapshot) this.lCtx.putImageData(this._snapshot, 0, 0);
   }
 
-  _pushHistory() {
-    const snap = this.lCtx.getImageData(0, 0, this.lCanvas.width, this.lCanvas.height);
-    this.history.push(snap);
-    if (this.history.length > this.MAX_HIST) this.history.shift();
-  }
+  // ── Undo ─────────────────────────────────────────────────────────────────
 
   undo() {
-    if (this.history.length === 0) return;
-    this.history.pop();
-    if (this.history.length > 0) {
-      this.lCtx.putImageData(this.history[this.history.length - 1], 0, 0);
-    } else {
-      this.lCtx.clearRect(0, 0, this.lCanvas.width, this.lCanvas.height);
-    }
+    if (this.strokes.length === 0) return;
+    this.strokes.pop();
+    this._redrawLocal();
   }
 
   clear() {
+    this.strokes = [];
     this.lCtx.clearRect(0, 0, this.lCanvas.width, this.lCanvas.height);
-    this.history = [];
   }
 
-  // ── Traços Remotos ────────────────────────────────────────────────────────
+  /** Redesenha todos os strokes locais do zero */
+  _redrawLocal() {
+    this.lCtx.clearRect(0, 0, this.lCanvas.width, this.lCanvas.height);
+    for (const s of this.strokes) {
+      this._drawFullStroke(this.lCtx, s);
+    }
+  }
+
+  _drawFullStroke(ctx, stroke) {
+    if (!stroke.points.length) return;
+    ctx.save();
+    this._applyStyle(ctx, stroke.tool, stroke.color, stroke.size);
+
+    if (stroke.points.length === 1) {
+      const { x, y } = this._normToPx(stroke.points[0].nx, stroke.points[0].ny);
+      ctx.beginPath();
+      ctx.arc(x, y, ctx.lineWidth / 2, 0, Math.PI * 2);
+      ctx.fillStyle = stroke.tool === 'eraser' ? 'rgba(0,0,0,1)' : stroke.color;
+      ctx.fill();
+    } else if (stroke.tool === 'line') {
+      const s = this._normToPx(stroke.points[0].nx, stroke.points[0].ny);
+      const e = this._normToPx(stroke.points[stroke.points.length - 1].nx, stroke.points[stroke.points.length - 1].ny);
+      ctx.beginPath(); ctx.moveTo(s.x, s.y); ctx.lineTo(e.x, e.y); ctx.stroke();
+    } else if (stroke.tool === 'rect') {
+      const s = this._normToPx(stroke.points[0].nx, stroke.points[0].ny);
+      const e = this._normToPx(stroke.points[stroke.points.length - 1].nx, stroke.points[stroke.points.length - 1].ny);
+      ctx.strokeRect(s.x, s.y, e.x - s.x, e.y - s.y);
+    } else {
+      ctx.beginPath();
+      const p0 = this._normToPx(stroke.points[0].nx, stroke.points[0].ny);
+      ctx.moveTo(p0.x, p0.y);
+      for (let i = 1; i < stroke.points.length; i++) {
+        const p = this._normToPx(stroke.points[i].nx, stroke.points[i].ny);
+        ctx.lineTo(p.x, p.y);
+      }
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+
+  // ── Traços remotos ───────────────────────────────────────────────────────
 
   applyRemoteMessage(msg) {
-    if (!this.showRemote && msg.type !== 'clear' && msg.type !== 'undo') return;
-
     const ctx = this.rCtx;
 
     switch (msg.type) {
-      case 'stroke:start':
+      case 'stroke:start': {
         this._remoteStrokes[msg.id] = {
-          tool:  msg.tool,
-          color: msg.color,
-          size:  msg.size,
-          lastX: msg.x,
-          lastY: msg.y,
+          tool: msg.tool, color: msg.color, size: msg.size,
+          lastNX: msg.nx, lastNY: msg.ny,
         };
-        // Ponto inicial (dot, para quando o usuário apenas toca)
-        this._applyRemoteSegment(ctx, msg.id, msg.x, msg.y, true);
+        // Ponto inicial
+        const { x, y } = this._normToPx(msg.nx, msg.ny);
+        ctx.save();
+        this._applyStyle(ctx, msg.tool, msg.color, msg.size);
+        ctx.beginPath();
+        ctx.arc(x, y, Math.max(1, ctx.lineWidth / 2), 0, Math.PI * 2);
+        ctx.fillStyle = msg.tool === 'eraser' ? 'rgba(0,0,0,1)' : msg.color;
+        ctx.fill();
+        ctx.restore();
         break;
+      }
 
       case 'stroke:move': {
         const s = this._remoteStrokes[msg.id];
         if (!s) break;
-        this._applyRemoteSegment(ctx, msg.id, msg.x, msg.y, false);
-        s.lastX = msg.x;
-        s.lastY = msg.y;
+        const a = this._normToPx(s.lastNX, s.lastNY);
+        const b = this._normToPx(msg.nx,   msg.ny);
+        ctx.save();
+        this._applyStyle(ctx, s.tool, s.color, s.size);
+        ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+        ctx.restore();
+        s.lastNX = msg.nx; s.lastNY = msg.ny;
         break;
       }
 
@@ -224,80 +300,43 @@ export class AnnotationEngine {
         break;
 
       case 'clear':
-        ctx.clearRect(0, 0, this.rCanvas.width, this.rCanvas.height);
+        this.rCtx.clearRect(0, 0, this.rCanvas.width, this.rCanvas.height);
         this._remoteStrokes = {};
         break;
 
       case 'undo':
-        // Undo remoto: limpa o canvas remoto (undo completo seria necessário
-        // histórico completo do estado — por simplicidade limpamos)
-        ctx.clearRect(0, 0, this.rCanvas.width, this.rCanvas.height);
+        // Undo remoto: limpa canvas remoto (histórico completo no celular)
+        this.rCtx.clearRect(0, 0, this.rCanvas.width, this.rCanvas.height);
         this._remoteStrokes = {};
         break;
     }
   }
 
-  _applyRemoteSegment(ctx, id, x, y, isStart) {
-    const s = this._remoteStrokes[id];
-    if (!s) return;
-
-    const prevOp    = ctx.globalCompositeOperation;
-    const prevAlpha = ctx.globalAlpha;
-
-    if (s.tool === 'eraser') {
-      ctx.globalCompositeOperation = 'destination-out';
-      ctx.strokeStyle = 'rgba(0,0,0,1)';
-      ctx.lineWidth   = s.size * 4;
-      ctx.globalAlpha = 1;
-    } else {
-      ctx.globalCompositeOperation = 'source-over';
-      ctx.strokeStyle = s.color;
-      ctx.lineWidth   = s.tool === 'marker' ? s.size * 3 : s.size;
-      ctx.globalAlpha = s.tool === 'marker' ? 0.4 : 1;
-    }
-
-    ctx.lineCap  = 'round';
-    ctx.lineJoin = 'round';
-
-    if (isStart) {
-      // Ponto inicial: círculo pequeno
-      ctx.beginPath();
-      ctx.arc(x, y, ctx.lineWidth / 2, 0, Math.PI * 2);
-      ctx.fillStyle = ctx.strokeStyle;
-      ctx.fill();
-    } else {
-      ctx.beginPath();
-      ctx.moveTo(s.lastX, s.lastY);
-      ctx.lineTo(x, y);
-      ctx.stroke();
-    }
-
-    ctx.globalAlpha = prevAlpha;
-    ctx.globalCompositeOperation = prevOp;
+  /**
+   * Chamado quando o tamanho do canvas muda (zoom do PDF no desktop).
+   * Re-renderiza todos os strokes locais e remotos nas novas dimensões.
+   */
+  onCanvasResize() {
+    this._redrawLocal();
+    // Os strokes remotos estão "embutidos" no canvas bitmap — ao redimensionar
+    // o canvas é apagado automaticamente. Para manter, seria necessário guardar
+    // o histórico remoto também. Por ora, limpa e avisa.
+    this.rCtx.clearRect(0, 0, this.rCanvas.width, this.rCanvas.height);
   }
 
-  // ── Exportar ──────────────────────────────────────────────────────────────
+  // ── Export ───────────────────────────────────────────────────────────────
 
   exportPNG() {
     const merged = document.createElement('canvas');
     merged.width  = this.lCanvas.width;
     merged.height = this.lCanvas.height;
     const mCtx = merged.getContext('2d');
-
-    // Fundo branco
     mCtx.fillStyle = '#ffffff';
     mCtx.fillRect(0, 0, merged.width, merged.height);
-
-    // PDF
-    const pdfCanvas = document.getElementById('pdf-canvas');
-    if (pdfCanvas) mCtx.drawImage(pdfCanvas, 0, 0);
-
-    // Anotações locais
+    const pdf = document.getElementById('pdf-canvas');
+    if (pdf) mCtx.drawImage(pdf, 0, 0);
     mCtx.drawImage(this.lCanvas, 0, 0);
-
-    // Anotações remotas
     if (this.showRemote) mCtx.drawImage(this.rCanvas, 0, 0);
-
     return merged.toDataURL('image/png');
   }
 }

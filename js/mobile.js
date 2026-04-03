@@ -1,24 +1,40 @@
 /**
- * mobile.js
- * ─────────
- * Controller principal do lado celular (celular.html).
- * Gerencia:
- *  - Conexão WebRTC como guest
- *  - Canvas de desenho com toque
- *  - Pan & zoom do viewport (enviado ao host)
- *  - Palm rejection básico
+ * mobile.js  (v3 — coordenadas normalizadas)
+ * ────────────────────────────────────────────
+ * ARQUITETURA DE COORDENADAS:
+ *
+ *  Tudo que sai do celular viaja em coordenadas NORMALIZADAS (0–1)
+ *  relativas ao tamanho do documento PDF (não à tela).
+ *
+ *    normX = (vpX + canvasX / vpZ) / pdfDocW
+ *    normY = (vpY + canvasY / vpZ) / pdfDocH
+ *
+ *  O desktop recebe coordenadas normalizadas e converte para px do canvas:
+ *    pxX = normX * pdfCanvas.width
+ *    pxY = normY * pdfCanvas.height
+ *
+ *  Isso garante que os traços ficam fixos no PDF independente de zoom
+ *  ou resolução de tela em qualquer dispositivo.
+ *
+ *  O viewport também é enviado normalizado:
+ *    { x: vpX/pdfW, y: vpY/pdfH, w: visibleW/pdfW, h: visibleH/pdfH }
+ *
+ * FUNDO DO CANVAS:
+ *  O canvas exibe uma miniatura (thumbnail) do PDF atual recebida do
+ *  desktop via mensagem 'pdf:thumb', renderizada como fundo.
+ *  O usuário pode alternar entre fundo escuro, claro ou PDF.
  */
 
 import { DigiPeer, ConnState } from './webrtc.js';
 import { toast } from './toast.js';
 
-// ── Elementos DOM ──────────────────────────────────────────────────────────
+// ── DOM ────────────────────────────────────────────────────────────────────
 
-const $ = (id) => document.getElementById(id);
+const $ = id => document.getElementById(id);
 
 const screenConnect    = $('screen-connect');
 const screenDraw       = $('screen-draw');
-const codeChars        = Array.from(document.querySelectorAll('.code-char'));
+const codeChars        = [...document.querySelectorAll('.code-char')];
 const btnConnect       = $('btn-connect');
 const connectStatus    = $('connect-status');
 const connectMsg       = $('connect-msg');
@@ -37,158 +53,423 @@ const mobileMenu       = $('mobile-menu');
 const toggleHaptic     = $('toggle-haptic');
 const togglePalm       = $('toggle-palm');
 const panSensitivity   = $('pan-sensitivity');
+const toggleZoomLock   = $('toggle-zoom-lock');
+const bgSelect         = $('bg-select');
 
-// ── Estado ─────────────────────────────────────────────────────────────────
+// ── Estado de conexão ──────────────────────────────────────────────────────
 
-let peer        = null;
-let ctx         = null;
-let strokeId    = 0;
-let currentId   = null;
-let isDrawing   = false;
-let lastX       = 0;
-let lastY       = 0;
+let peer = null;
+
+// ── Estado do canvas ───────────────────────────────────────────────────────
+
+let ctx        = null;
+let canvasW    = 0;   // largura CSS do canvas
+let canvasH    = 0;   // altura CSS do canvas
+
+// ── Viewport — posição e zoom sobre o documento PDF ───────────────────────
+// vpX, vpY = canto superior esquerdo do viewport em px do espaço do documento
+// vpZ      = fator de zoom (1 = 1px tela = 1px doc; 2 = tela é 2× mais detalhada)
+// pdfDocW, pdfDocH = dimensões do documento em px (recebidas do desktop)
+
+let vpX     = 0;
+let vpY     = 0;
+let vpZ     = 1.0;
+let pdfDocW = 1000;   // valor padrão até o desktop enviar o tamanho real
+let pdfDocH = 1414;
+let zoomLocked  = false;  // travar zoom (sincronizado com desktop)
+
+// ── Thumbnail do PDF (fundo do canvas) ────────────────────────────────────
+
+let pdfThumb     = null;   // HTMLImageElement com a miniatura
+let bgMode       = 'pdf';  // 'pdf' | 'dark' | 'light' | 'grid'
+
+// ── Ferramentas de desenho ─────────────────────────────────────────────────
 
 let currentTool  = 'pen';
 let currentColor = '#e63946';
 let currentSize  = 2;
+let isPanMode    = false;
+let palmReject   = true;
 
-// Viewport (pan & zoom no celular)
-let vpX   = 0;
-let vpY   = 0;
-let vpZ   = 1.0;  // zoom do viewport (não afeta PDF no desktop)
+// ── Stroke em andamento ────────────────────────────────────────────────────
 
-// Pan com dois dedos
+let isDrawing  = false;
+let strokeId   = 0;
+let currentId  = null;
+let lastX      = 0;   // px CSS canvas
+let lastY      = 0;
+
+// Histórico de snapshots para undo local (o undo remoto envia msg separada)
+const history  = [];
+const MAX_HIST = 20;
+
+// ── Gestos de dois dedos ───────────────────────────────────────────────────
+
 let lastPinchDist = null;
 let lastPanX      = null;
 let lastPanY      = null;
-let isPanMode     = false;
 
-// Palm rejection: ignora toques com área grande
-let palmReject = true;
+// ── Fundo ──────────────────────────────────────────────────────────────────
 
-// Histórico para undo local
-const history = [];
-const MAX_HIST = 20;
+const BG_STYLES = {
+  pdf:   null,              // usa pdfThumb
+  dark:  '#1a1a2e',
+  light: '#f5f5f0',
+  grid:  '__grid__',
+};
 
-// ── Canvas setup ───────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════
+// CANVAS
+// ══════════════════════════════════════════════════════════════════════════
 
 function resizeCanvas() {
   const dpr  = window.devicePixelRatio || 1;
   const hud  = $('mobile-hud');
   const bar  = $('mobile-toolbar');
-  const hudH = hud ? hud.offsetHeight : 52;
-  const barH = bar ? bar.offsetHeight : 110;
-  const w    = window.innerWidth;
-  const h    = window.innerHeight - hudH - barH;
+  const hudH = hud?.offsetHeight ?? 52;
+  const barH = bar?.offsetHeight ?? 110;
 
-  mobileCanvas.width  = w * dpr;
-  mobileCanvas.height = h * dpr;
-  mobileCanvas.style.width  = w + 'px';
-  mobileCanvas.style.height = h + 'px';
+  canvasW = window.innerWidth;
+  canvasH = window.innerHeight - hudH - barH;
+
+  mobileCanvas.width  = canvasW * dpr;
+  mobileCanvas.height = canvasH * dpr;
+  mobileCanvas.style.width  = canvasW + 'px';
+  mobileCanvas.style.height = canvasH + 'px';
   mobileCanvas.style.top    = hudH + 'px';
 
   ctx = mobileCanvas.getContext('2d');
   ctx.scale(dpr, dpr);
   ctx.lineCap  = 'round';
   ctx.lineJoin = 'round';
+
+  redrawAll();
 }
 
-window.addEventListener('resize', resizeCanvas);
+window.addEventListener('resize', () => {
+  if (screenDraw.classList.contains('active')) resizeCanvas();
+});
 
-// ── Auto-preenche código via URL param (?code=XXXXXX) ─────────────────────
-(function autoFillCode() {
-  const params = new URLSearchParams(window.location.search);
-  const code   = params.get('code');
-  if (code && /^\d{6}$/.test(code)) {
-    code.split('').forEach((char, i) => {
-      if (codeChars[i]) {
-        codeChars[i].value = char;
-        codeChars[i].classList.add('filled');
-      }
-    });
-    checkCodeComplete();
-    // Pequeno delay para a UI montar
-    setTimeout(() => btnConnect.click(), 400);
+// ══════════════════════════════════════════════════════════════════════════
+// NORMALIZAÇÃO DE COORDENADAS
+// ══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Converte posição CSS no canvas para coordenada normalizada (0–1)
+ * no espaço do documento PDF.
+ *
+ *  docX = vpX + canvasX / vpZ   (px no doc)
+ *  normX = docX / pdfDocW       (0–1)
+ */
+function toNorm(canvasX, canvasY) {
+  return {
+    nx: (vpX + canvasX / vpZ) / pdfDocW,
+    ny: (vpY + canvasY / vpZ) / pdfDocH,
+  };
+}
+
+/**
+ * Converte coordenada normalizada de volta para px CSS no canvas atual.
+ * Usada para re-renderizar o histórico local ao fazer pan/zoom.
+ */
+function fromNorm(nx, ny) {
+  return {
+    x: (nx * pdfDocW - vpX) * vpZ,
+    y: (ny * pdfDocH - vpY) * vpZ,
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// VIEWPORT — clamp e broadcast
+// ══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Clamp do viewport:
+ *  - vpX não pode ser negativo
+ *  - vpX não pode ultrapassar pdfDocW - visibleW (não rola para além do doc)
+ *  - idem para vpY
+ */
+function clampViewport() {
+  const visW = canvasW / vpZ;
+  const visH = canvasH / vpZ;
+
+  vpX = Math.max(0, Math.min(vpX, Math.max(0, pdfDocW - visW)));
+  vpY = Math.max(0, Math.min(vpY, Math.max(0, pdfDocH - visH)));
+}
+
+/** Mensagem de viewport normalizada enviada ao desktop */
+function buildViewportMsg() {
+  const visW = canvasW / vpZ;
+  const visH = canvasH / vpZ;
+  return {
+    type:   'viewport',
+    // posição normalizada do canto superior esquerdo
+    nx:     vpX / pdfDocW,
+    ny:     vpY / pdfDocH,
+    // tamanho normalizado da área visível
+    nw:     visW / pdfDocW,
+    nh:     visH / pdfDocH,
+    zoom:   vpZ,
+    locked: zoomLocked,
+  };
+}
+
+let _vpBroadcastTimer = null;
+function startViewportBroadcast() {
+  if (_vpBroadcastTimer) return;
+  _vpBroadcastTimer = setInterval(() => {
+    if (peer?.state === ConnState.CONNECTED) {
+      peer.send(buildViewportMsg());
+    }
+  }, 33); // ~30 fps
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// FUNDO DO CANVAS
+// ══════════════════════════════════════════════════════════════════════════
+
+function redrawAll() {
+  if (!ctx) return;
+  ctx.clearRect(0, 0, canvasW, canvasH);
+  drawBackground();
+  // Os traços locais estão no canvas bitmap — re-renderizados via histórico
+  // ao fazer pan/zoom (ver nota abaixo em handlePanZoom).
+}
+
+function drawBackground() {
+  const mode = bgMode;
+
+  if (mode === 'dark') {
+    ctx.fillStyle = '#1a1a2e';
+    ctx.fillRect(0, 0, canvasW, canvasH);
+    return;
   }
-})();
 
-// ── Code input ─────────────────────────────────────────────────────────────
+  if (mode === 'light') {
+    ctx.fillStyle = '#f8f8f5';
+    ctx.fillRect(0, 0, canvasW, canvasH);
+    return;
+  }
+
+  if (mode === 'grid') {
+    ctx.fillStyle = '#0d0d0f';
+    ctx.fillRect(0, 0, canvasW, canvasH);
+    ctx.strokeStyle = 'rgba(124,106,247,0.2)';
+    ctx.lineWidth = 0.5;
+    const step = 30;
+    for (let x = 0; x < canvasW; x += step) {
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvasH); ctx.stroke();
+    }
+    for (let y = 0; y < canvasH; y += step) {
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvasW, y); ctx.stroke();
+    }
+    return;
+  }
+
+  // mode === 'pdf' — renderiza miniatura do PDF como fundo com pan/zoom
+  if (pdfThumb) {
+    ctx.save();
+    // Mapeia o doc inteiro para o canvas com offset e zoom do viewport
+    const scaleX = canvasW / pdfDocW;
+    const scaleY = canvasH / pdfDocH;
+    // Posição e tamanho da thumb no canvas
+    const destX = -vpX * vpZ;
+    const destY = -vpY * vpZ;
+    const destW = pdfDocW * vpZ;
+    const destH = pdfDocH * vpZ;
+    ctx.drawImage(pdfThumb, destX, destY, destW, destH);
+    ctx.restore();
+  } else {
+    ctx.fillStyle = '#1a1a2e';
+    ctx.fillRect(0, 0, canvasW, canvasH);
+    // Placeholder grid
+    ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+    ctx.lineWidth = 1;
+    for (let x = 0; x < canvasW; x += 40) {
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvasH); ctx.stroke();
+    }
+    for (let y = 0; y < canvasH; y += 40) {
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvasW, y); ctx.stroke();
+    }
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// TRAÇOS LOCAIS — armazenados em coordenadas normalizadas
+// ══════════════════════════════════════════════════════════════════════════
+// Para o celular exibir os próprios traços corretamente ao pan/zoom,
+// armazenamos cada stroke como lista de pontos normalizados e
+// re-renderizamos do zero ao mudar o viewport.
+
+const localStrokes = [];    // [{ tool, color, size, points: [{nx,ny}] }]
+let   activeStroke = null;  // stroke em andamento
+
+function startLocalStroke(canvasX, canvasY) {
+  const { nx, ny } = toNorm(canvasX, canvasY);
+  activeStroke = { tool: currentTool, color: currentColor, size: currentSize, points: [{ nx, ny }] };
+  localStrokes.push(activeStroke);
+  if (localStrokes.length > 200) localStrokes.shift(); // limite de memória
+}
+
+function continueLocalStroke(canvasX, canvasY) {
+  if (!activeStroke) return;
+  const { nx, ny } = toNorm(canvasX, canvasY);
+  activeStroke.points.push({ nx, ny });
+  // Desenha apenas o segmento novo (incremental, eficiente)
+  const pts = activeStroke.points;
+  drawStrokeSegment(activeStroke, pts[pts.length - 2], pts[pts.length - 1]);
+}
+
+function endLocalStroke() {
+  activeStroke = null;
+}
+
+/** Re-renderiza todos os traços locais (chamado após pan/zoom) */
+function redrawLocalStrokes() {
+  for (const s of localStrokes) {
+    drawFullStroke(s);
+  }
+}
+
+function drawFullStroke(stroke) {
+  if (stroke.points.length === 0) return;
+  ctx.save();
+  applyStrokeStyle(ctx, stroke);
+
+  if (stroke.points.length === 1) {
+    // Ponto único: círculo
+    const { x, y } = fromNorm(stroke.points[0].nx, stroke.points[0].ny);
+    ctx.beginPath();
+    ctx.arc(x, y, stroke.size / 2, 0, Math.PI * 2);
+    ctx.fillStyle = stroke.tool === 'eraser' ? 'rgba(0,0,0,1)' : stroke.color;
+    ctx.fill();
+  } else {
+    ctx.beginPath();
+    const p0 = fromNorm(stroke.points[0].nx, stroke.points[0].ny);
+    ctx.moveTo(p0.x, p0.y);
+    for (let i = 1; i < stroke.points.length; i++) {
+      const p = fromNorm(stroke.points[i].nx, stroke.points[i].ny);
+      ctx.lineTo(p.x, p.y);
+    }
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawStrokeSegment(stroke, pA, pB) {
+  if (!pA || !pB) return;
+  const a = fromNorm(pA.nx, pA.ny);
+  const b = fromNorm(pB.nx, pB.ny);
+  ctx.save();
+  applyStrokeStyle(ctx, stroke);
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(b.x, b.y);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function applyStrokeStyle(c, stroke) {
+  c.lineCap  = 'round';
+  c.lineJoin = 'round';
+  if (stroke.tool === 'eraser') {
+    c.globalCompositeOperation = 'destination-out';
+    c.strokeStyle = 'rgba(0,0,0,1)';
+    c.lineWidth   = stroke.size * 4 * vpZ;
+    c.globalAlpha = 1;
+  } else {
+    c.globalCompositeOperation = 'source-over';
+    c.strokeStyle = stroke.color;
+    c.lineWidth   = (stroke.tool === 'marker' ? stroke.size * 3 : stroke.size) * vpZ;
+    c.globalAlpha = stroke.tool === 'marker' ? 0.4 : 1;
+  }
+}
+
+/** Aplica pan/zoom: redesenha fundo + todos os strokes locais */
+function handlePanZoom() {
+  clampViewport();
+  redrawAll();
+  redrawLocalStrokes();
+  // Redo do stroke em andamento se existir
+  if (activeStroke && activeStroke.points.length > 1) {
+    drawFullStroke(activeStroke);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// CODE INPUT
+// ══════════════════════════════════════════════════════════════════════════
 
 codeChars.forEach((input, idx) => {
-  input.addEventListener('input', (e) => {
+  input.addEventListener('input', e => {
     const val = e.target.value.replace(/\D/, '');
     input.value = val;
-    input.classList.toggle('filled', val !== '');
-
-    if (val && idx < codeChars.length - 1) {
-      codeChars[idx + 1].focus();
-    }
-
+    input.classList.toggle('filled', !!val);
+    if (val && idx < codeChars.length - 1) codeChars[idx + 1].focus();
     checkCodeComplete();
   });
-
-  input.addEventListener('keydown', (e) => {
+  input.addEventListener('keydown', e => {
     if (e.key === 'Backspace' && !input.value && idx > 0) {
       codeChars[idx - 1].focus();
       codeChars[idx - 1].value = '';
       codeChars[idx - 1].classList.remove('filled');
     }
   });
-
-  input.addEventListener('paste', (e) => {
+  input.addEventListener('paste', e => {
     e.preventDefault();
     const text = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, 6);
-    text.split('').forEach((char, i) => {
-      if (codeChars[i]) {
-        codeChars[i].value = char;
-        codeChars[i].classList.add('filled');
-      }
+    text.split('').forEach((c, i) => {
+      if (codeChars[i]) { codeChars[i].value = c; codeChars[i].classList.add('filled'); }
     });
     checkCodeComplete();
   });
 });
 
-function getCode() {
-  return codeChars.map(i => i.value).join('');
-}
+const getCode          = () => codeChars.map(i => i.value).join('');
+const checkCodeComplete = () => { btnConnect.disabled = getCode().length < 6; };
 
-function checkCodeComplete() {
-  const code = getCode();
-  btnConnect.disabled = code.length < 6;
-}
+// Auto-fill via URL param
+;(function autoFill() {
+  const code = new URLSearchParams(location.search).get('code');
+  if (code && /^\d{6}$/.test(code)) {
+    code.split('').forEach((c, i) => {
+      if (codeChars[i]) { codeChars[i].value = c; codeChars[i].classList.add('filled'); }
+    });
+    checkCodeComplete();
+    setTimeout(() => btnConnect.click(), 400);
+  }
+})();
 
-// ── Conexão ────────────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════
+// CONEXÃO
+// ══════════════════════════════════════════════════════════════════════════
 
 btnConnect.addEventListener('click', async () => {
   const code = getCode();
   if (code.length < 6) return;
-
-  setConnectStatus('connecting', 'Conectando...');
+  setStatus('connecting', 'Conectando...');
   btnConnect.disabled = true;
 
   peer = new DigiPeer({
-    role:          'guest',
-    code,
+    role: 'guest', code,
     onStateChange: handleStateChange,
     onMessage:     handleMessage,
   });
-
   try {
     await peer.startAsGuest();
   } catch (err) {
-    setConnectStatus('error', err.message);
+    setStatus('error', err.message.split('\n')[0]);
     btnConnect.disabled = false;
   }
 });
 
 function handleStateChange(state) {
   if (state === ConnState.CONNECTED) {
-    setConnectStatus('success', 'Conectado!');
+    setStatus('success', 'Conectado!');
     setTimeout(showDrawScreen, 600);
   } else if (state === ConnState.DISCONNECTED) {
     mobileStatusText.textContent = 'Desconectado';
     mobileDot.className = 'status-dot disconnected';
-    // Se estava na tela de desenho, avisa e volta para conexão
     if (screenDraw.classList.contains('active')) {
       toast('Conexão perdida', 'error');
       setTimeout(() => {
@@ -196,13 +477,13 @@ function handleStateChange(state) {
         screenDraw.style.display = '';
         screenConnect.classList.add('active');
         btnConnect.disabled = false;
-        setConnectStatus('', '');
+        setStatus('', '');
       }, 1500);
     }
   } else if (state === ConnState.CONNECTING) {
-    setConnectStatus('connecting', 'Aguardando resposta...');
+    setStatus('connecting', 'Aguardando resposta...');
   } else if (state === ConnState.ERROR) {
-    setConnectStatus('error', 'Falha na conexão');
+    setStatus('error', 'Falha na conexão');
     btnConnect.disabled = false;
   }
 }
@@ -210,13 +491,50 @@ function handleStateChange(state) {
 function handleMessage(msg) {
   if (!msg?.type) return;
 
-  // Aplica traços do desktop no canvas do celular
-  if (msg.type === 'clear') {
-    ctx?.clearRect(0, 0, mobileCanvas.width, mobileCanvas.height);
+  switch (msg.type) {
+    // Desktop envia dimensões do PDF para normalização
+    case 'pdf:size':
+      pdfDocW = msg.w;
+      pdfDocH = msg.h;
+      // Centra o viewport na página ao receber o tamanho
+      vpX = 0; vpY = 0; vpZ = 1;
+      clampViewport();
+      handlePanZoom();
+      break;
+
+    // Desktop envia miniatura do PDF como data URL
+    case 'pdf:thumb':
+      loadThumb(msg.data);
+      break;
+
+    // Desktop sincroniza estado (zoom lock, etc.)
+    case 'state:sync':
+      if (typeof msg.zoomLocked === 'boolean') {
+        zoomLocked = msg.zoomLocked;
+        if (toggleZoomLock) toggleZoomLock.checked = zoomLocked;
+        toast(zoomLocked ? '🔒 Zoom travado pelo PC' : '🔓 Zoom liberado', 'info');
+      }
+      break;
+
+    // Desktop limpa anotações
+    case 'clear':
+      localStrokes.length = 0;
+      activeStroke = null;
+      redrawAll();
+      break;
   }
 }
 
-function setConnectStatus(type, text) {
+function loadThumb(dataUrl) {
+  const img = new Image();
+  img.onload = () => {
+    pdfThumb = img;
+    if (bgMode === 'pdf') handlePanZoom();
+  };
+  img.src = dataUrl;
+}
+
+function setStatus(type, text) {
   connectStatus.className = `connect-status ${type}`;
   connectMsg.textContent  = text;
 }
@@ -227,33 +545,29 @@ function showDrawScreen() {
   screenDraw.style.display = 'flex';
   mobileStatusText.textContent = 'Conectado';
   mobileDot.className = 'status-dot connected';
-
   resizeCanvas();
   bindDrawEvents();
   startViewportBroadcast();
 }
 
-// ── Ferramentas ────────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════
+// FERRAMENTAS
+// ══════════════════════════════════════════════════════════════════════════
 
 document.querySelectorAll('.mob-tool').forEach(btn => {
   btn.addEventListener('click', () => {
     if (btn.id === 'btn-pan-mode') {
       isPanMode = !isPanMode;
       btn.classList.toggle('active', isPanMode);
-      // Remove active de outros botões quando pan está ativo
       if (isPanMode) {
         document.querySelectorAll('.mob-tool:not(#btn-pan-mode)').forEach(b => b.classList.remove('active'));
-        modeLabel.textContent = 'Viewport';
+        modeLabel.textContent = 'Navegar';
       } else {
-        btn.classList.remove('active');
-        modeLabel.textContent = 'Desenho';
-        // Reativa a ferramenta atual
         document.querySelector(`.mob-tool[data-tool="${currentTool}"]`)?.classList.add('active');
+        modeLabel.textContent = 'Desenho';
       }
       return;
     }
-
-    // Ferramenta de desenho normal
     isPanMode = false;
     btnPanMode.classList.remove('active');
     document.querySelectorAll('.mob-tool').forEach(b => b.classList.remove('active'));
@@ -271,249 +585,187 @@ document.querySelectorAll('.mob-size').forEach(btn => {
   });
 });
 
-mobColor.addEventListener('input', () => { currentColor = mobColor.value; });
+mobColor?.addEventListener('input', () => { currentColor = mobColor.value; });
 
-btnMobUndo.addEventListener('click', () => {
-  if (history.length > 0) {
-    const prev = history.pop();
-    ctx.putImageData(prev, 0, 0);
+btnMobUndo?.addEventListener('click', () => {
+  // Remove o último stroke do histórico local e redesenha
+  if (localStrokes.length > 0) {
+    localStrokes.pop();
+    handlePanZoom();
     peer?.send({ type: 'undo' });
   }
 });
 
-btnMobClear.addEventListener('click', () => {
-  ctx.clearRect(0, 0, mobileCanvas.width, mobileCanvas.height);
-  history.length = 0;
+btnMobClear?.addEventListener('click', () => {
+  localStrokes.length = 0;
+  activeStroke = null;
+  redrawAll();
   peer?.send({ type: 'clear' });
 });
 
-btnMobDisconnect.addEventListener('click', async () => {
+btnMobDisconnect?.addEventListener('click', async () => {
+  clearInterval(_vpBroadcastTimer);
+  _vpBroadcastTimer = null;
   await peer?.disconnect();
   screenDraw.classList.remove('active');
   screenDraw.style.display = '';
   screenConnect.classList.add('active');
   codeChars.forEach(i => { i.value = ''; i.classList.remove('filled'); });
   checkCodeComplete();
-  setConnectStatus('', '');
-  history.length = 0;
+  setStatus('', '');
+  localStrokes.length = 0;
+  activeStroke = null;
 });
 
-// ── Menu lateral ──────────────────────────────────────────────────────────
+// ── Zoom lock ──────────────────────────────────────────────────────────────
+toggleZoomLock?.addEventListener('change', () => {
+  zoomLocked = toggleZoomLock.checked;
+  peer?.send({ type: 'state:sync', zoomLocked });
+  toast(zoomLocked ? '🔒 Zoom travado' : '🔓 Zoom liberado', 'info');
+});
 
-btnMobileMenu.addEventListener('click', () => mobileMenu.classList.remove('hidden'));
-btnCloseMenu.addEventListener('click',  () => mobileMenu.classList.add('hidden'));
-togglePalm.addEventListener('change',   () => { palmReject = togglePalm.checked; });
+// ── Fundo ──────────────────────────────────────────────────────────────────
+bgSelect?.addEventListener('change', () => {
+  bgMode = bgSelect.value;
+  handlePanZoom();
+});
 
-// ── Eventos de toque ───────────────────────────────────────────────────────
+// ── Menu ───────────────────────────────────────────────────────────────────
+btnMobileMenu?.addEventListener('click', () => mobileMenu.classList.remove('hidden'));
+btnCloseMenu?.addEventListener('click',  () => mobileMenu.classList.add('hidden'));
+togglePalm?.addEventListener('change',  () => { palmReject = togglePalm.checked; });
+
+// ══════════════════════════════════════════════════════════════════════════
+// EVENTOS DE TOQUE
+// ══════════════════════════════════════════════════════════════════════════
 
 function bindDrawEvents() {
-  mobileCanvas.addEventListener('touchstart', onTouchStart, { passive: false });
-  mobileCanvas.addEventListener('touchmove',  onTouchMove,  { passive: false });
-  mobileCanvas.addEventListener('touchend',   onTouchEnd,   { passive: false });
-  mobileCanvas.addEventListener('touchcancel',onTouchEnd,   { passive: false });
+  mobileCanvas.addEventListener('touchstart',  onTouchStart,  { passive: false });
+  mobileCanvas.addEventListener('touchmove',   onTouchMove,   { passive: false });
+  mobileCanvas.addEventListener('touchend',    onTouchEnd,    { passive: false });
+  mobileCanvas.addEventListener('touchcancel', onTouchEnd,    { passive: false });
 }
 
-function getCanvasPos(touch) {
+function getPos(touch) {
   const rect = mobileCanvas.getBoundingClientRect();
-  const dpr  = window.devicePixelRatio || 1;
-  return {
-    x: (touch.clientX - rect.left),   // em px CSS
-    y: (touch.clientY - rect.top),
-  };
+  return { x: touch.clientX - rect.left, y: touch.clientY - rect.top };
 }
 
-function isPalm(touch) {
+function isPalm(t) {
   if (!palmReject) return false;
-  // Touch de palma geralmente tem radiusX/Y > 30 ou force > 0.8
-  if (touch.radiusX > 30 || touch.radiusY > 30) return true;
-  if (touch.touchType === 'direct' && touch.force > 0.8) return true;
+  if (t.radiusX > 30 || t.radiusY > 30) return true;
   return false;
 }
 
 function onTouchStart(e) {
   e.preventDefault();
 
-  if (e.touches.length === 2) {
-    // Dois dedos: pan/zoom do viewport
-    lastPinchDist = getPinchDist(e.touches);
-    const mid = getPinchMid(e.touches);
-    lastPanX = mid.x;
-    lastPanY = mid.y;
-    isDrawing = false;
+  if (e.touches.length >= 2) {
+    // Cancela desenho em andamento ao entrar em pan/zoom
+    if (isDrawing) { isDrawing = false; endLocalStroke(); peer?.send({ type: 'stroke:end', id: currentId }); }
+    lastPinchDist = pinchDist(e.touches);
+    const m = pinchMid(e.touches);
+    lastPanX = m.x; lastPanY = m.y;
     return;
   }
 
-  const touch = e.touches[0];
-  if (isPalm(touch)) return;
+  const t = e.touches[0];
+  if (isPalm(t)) return;
+
+  const { x, y } = getPos(t);
 
   if (isPanMode) {
-    lastPanX = touch.clientX;
-    lastPanY = touch.clientY;
+    lastPanX = t.clientX; lastPanY = t.clientY;
     return;
   }
 
   isDrawing = true;
   strokeId++;
   currentId = `m${strokeId}`;
+  lastX = x; lastY = y;
 
-  const { x, y } = getCanvasPos(touch);
-  lastX = x;
-  lastY = y;
-
-  // Salva estado no histórico
-  const dpr = window.devicePixelRatio || 1;
-  history.push(ctx.getImageData(0, 0, mobileCanvas.width, mobileCanvas.height));
-  if (history.length > MAX_HIST) history.shift();
-
-  ctx.beginPath();
-  ctx.moveTo(x, y);
-
+  startLocalStroke(x, y);
   haptic();
 
-  // Envia ao desktop com coordenadas mapeadas para o documento
-  peer?.send({
-    type:  'stroke:start',
-    id:    currentId,
-    tool:  currentTool,
-    color: currentColor,
-    size:  currentSize,
-    x:     toDocX(x),
-    y:     toDocY(y),
-  });
+  const { nx, ny } = toNorm(x, y);
+  peer?.send({ type: 'stroke:start', id: currentId, tool: currentTool, color: currentColor, size: currentSize, nx, ny });
 }
 
 function onTouchMove(e) {
   e.preventDefault();
 
-  if (e.touches.length === 2) {
+  if (e.touches.length >= 2) {
     handlePinch(e.touches);
     return;
   }
 
-  const touch = e.touches[0];
-  if (isPalm(touch)) return;
+  const t = e.touches[0];
+  if (isPalm(t)) return;
+  const { x, y } = getPos(t);
 
   if (isPanMode) {
-    const dx = (touch.clientX - lastPanX) * parseFloat(panSensitivity.value);
-    const dy = (touch.clientY - lastPanY) * parseFloat(panSensitivity.value);
-    vpX -= dx;
-    vpY -= dy;
-    vpX = Math.max(0, vpX);
-    vpY = Math.max(0, vpY);
-    lastPanX = touch.clientX;
-    lastPanY = touch.clientY;
+    const sens = parseFloat(panSensitivity?.value ?? '1');
+    vpX -= (t.clientX - lastPanX) / vpZ * sens;
+    vpY -= (t.clientY - lastPanY) / vpZ * sens;
+    lastPanX = t.clientX; lastPanY = t.clientY;
+    handlePanZoom();
     return;
   }
 
   if (!isDrawing) return;
 
-  const { x, y } = getCanvasPos(touch);
-  drawSegment(x, y);
-  lastX = x;
-  lastY = y;
+  continueLocalStroke(x, y);
+  lastX = x; lastY = y;
 
-  peer?.send({ type: 'stroke:move', id: currentId, x: toDocX(x), y: toDocY(y) });
+  const { nx, ny } = toNorm(x, y);
+  peer?.send({ type: 'stroke:move', id: currentId, nx, ny });
 }
 
 function onTouchEnd(e) {
   e.preventDefault();
-  lastPinchDist = null;
-  lastPanX = null;
-  lastPanY = null;
+  lastPinchDist = null; lastPanX = null; lastPanY = null;
 
   if (!isDrawing) return;
   isDrawing = false;
-
+  endLocalStroke();
   peer?.send({ type: 'stroke:end', id: currentId });
 }
 
-// ── Desenho ────────────────────────────────────────────────────────────────
+// ── Pinch ──────────────────────────────────────────────────────────────────
 
-function drawSegment(x, y) {
-  if (currentTool === 'eraser') {
-    ctx.globalCompositeOperation = 'destination-out';
-    ctx.lineWidth = currentSize * 4;
-    ctx.strokeStyle = 'rgba(0,0,0,1)';
-  } else {
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.strokeStyle = currentColor;
-    ctx.lineWidth   = currentTool === 'marker' ? currentSize * 3 : currentSize;
-    ctx.globalAlpha = currentTool === 'marker' ? 0.4 : 1;
-  }
-
-  ctx.beginPath();
-  ctx.moveTo(lastX, lastY);
-  ctx.lineTo(x, y);
-  ctx.stroke();
-
-  ctx.globalAlpha = 1;
-  ctx.globalCompositeOperation = 'source-over';
-}
-
-// ── Pinch ─────────────────────────────────────────────────────────────────
-
-function getPinchDist(touches) {
-  const dx = touches[0].clientX - touches[1].clientX;
-  const dy = touches[0].clientY - touches[1].clientY;
-  return Math.hypot(dx, dy);
-}
-
-function getPinchMid(touches) {
-  return {
-    x: (touches[0].clientX + touches[1].clientX) / 2,
-    y: (touches[0].clientY + touches[1].clientY) / 2,
-  };
-}
+const pinchDist = ts => Math.hypot(ts[0].clientX - ts[1].clientX, ts[0].clientY - ts[1].clientY);
+const pinchMid  = ts => ({ x: (ts[0].clientX + ts[1].clientX) / 2, y: (ts[0].clientY + ts[1].clientY) / 2 });
 
 function handlePinch(touches) {
-  const dist = getPinchDist(touches);
-  const mid  = getPinchMid(touches);
+  const dist = pinchDist(touches);
+  const mid  = pinchMid(touches);
 
-  if (lastPinchDist !== null) {
+  if (!zoomLocked && lastPinchDist !== null) {
     const scale = dist / lastPinchDist;
-    vpZ = Math.min(Math.max(0.5, vpZ * scale), 8.0);
+    const prevZ = vpZ;
+    vpZ = Math.min(Math.max(0.25, vpZ * scale), 10.0);
+
+    // Zoom centrado no ponto médio dos dedos
+    const focusX = (mid.x - mobileCanvas.getBoundingClientRect().left);
+    const focusY = (mid.y - mobileCanvas.getBoundingClientRect().top);
+    vpX += focusX / prevZ - focusX / vpZ;
+    vpY += focusY / prevZ - focusY / vpZ;
   }
 
   if (lastPanX !== null) {
-    const sens = parseFloat(panSensitivity.value);
-    vpX -= (mid.x - lastPanX) * sens;
-    vpY -= (mid.y - lastPanY) * sens;
-    vpX  = Math.max(0, vpX);
-    vpY  = Math.max(0, vpY);
+    const sens = parseFloat(panSensitivity?.value ?? '1');
+    vpX -= (mid.x - lastPanX) / vpZ * sens;
+    vpY -= (mid.y - lastPanY) / vpZ * sens;
   }
 
   lastPinchDist = dist;
-  lastPanX      = mid.x;
-  lastPanY      = mid.y;
+  lastPanX = mid.x; lastPanY = mid.y;
+
+  handlePanZoom();
 }
 
-// ── Viewport broadcast ────────────────────────────────────────────────────
-
-// Envia posição do viewport ~30fps
-function startViewportBroadcast() {
-  setInterval(() => {
-    if (!peer || peer.state !== ConnState.CONNECTED) return;
-    peer.send({
-      type:    'viewport',
-      x:       vpX,
-      y:       vpY,
-      zoom:    vpZ,
-      canvasW: mobileCanvas.width  / (window.devicePixelRatio || 1),
-      canvasH: mobileCanvas.height / (window.devicePixelRatio || 1),
-    });
-  }, 33);
-}
-
-// ── Mapeamento de coordenadas ─────────────────────────────────────────────
-
-// Converte coordenada do canvas do celular para coordenada no documento PDF
-function toDocX(x) { return vpX + x / vpZ; }
-function toDocY(y) { return vpY + y / vpZ; }
-
-// ── Haptic ────────────────────────────────────────────────────────────────
+// ── Haptic ─────────────────────────────────────────────────────────────────
 
 function haptic() {
-  if (toggleHaptic.checked && navigator.vibrate) {
-    navigator.vibrate(8);
-  }
+  if (toggleHaptic?.checked && navigator.vibrate) navigator.vibrate(8);
 }

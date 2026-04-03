@@ -1,65 +1,73 @@
 /**
- * desktop.js
- * ──────────
- * Controller principal do lado desktop (index.html).
- * Orquestra PDF, anotação, WebRTC e UI.
+ * desktop.js  (v3 — coordenadas normalizadas + sincronização de estado)
+ * ────────────────────────────────────────────────────────────────────────
+ * ARQUITETURA DE COORDENADAS:
+ *
+ *  O desktop é a fonte de verdade do tamanho do documento.
+ *  Ao carregar/renderizar um PDF, envia ao celular:
+ *    { type: 'pdf:size', w: canvas.width, h: canvas.height }
+ *    { type: 'pdf:thumb', data: <dataURL 400px> }
+ *
+ *  Todos os strokes trafegam em coordenadas normalizadas (nx, ny ∈ 0–1).
+ *  No desktop:  nx * pdfCanvas.width  → px do canvas
+ *  No celular:  nx * pdfDocW          → px do espaço do doc
+ *
+ * VIEWPORT:
+ *  O celular envia { nx, ny, nw, nh } normalizados.
+ *  O indicador no desktop: x = nx * pdfCanvas.width, etc.
+ *
+ * SINCRONIZAÇÃO DE ESTADO:
+ *  { type: 'state:sync', zoomLocked: bool } — bidirecional
  */
 
-import { generateCode } from './signaling.js';
+import { generateCode }    from './signaling.js';
 import { DigiPeer, ConnState } from './webrtc.js';
-import { PDFViewer } from './pdf-viewer.js';
+import { PDFViewer }        from './pdf-viewer.js';
 import { AnnotationEngine } from './annotation.js';
-import { toast } from './toast.js';
+import { toast }            from './toast.js';
 
-// ── Elementos DOM ──────────────────────────────────────────────────────────
+// ── DOM ────────────────────────────────────────────────────────────────────
 
-const $ = (id) => document.getElementById(id);
+const $ = id => document.getElementById(id);
 
-const screenWelcome    = $('screen-welcome');
-const screenMain       = $('screen-main');
-const fileInput        = $('file-input');
-const btnOpenPDF       = $('btn-open-pdf');
-const btnDemo          = $('btn-demo');
-const pdfPanel         = $('pdf-panel');
-const canvasWrapper    = $('canvas-wrapper');
-const pdfCanvas        = $('pdf-canvas');
-const annotationCanvas = $('annotation-canvas');
-const remoteCanvas     = $('remote-canvas');
-const viewportIndicator= $('viewport-indicator');
-const pageInfo         = $('page-info');
-const zoomLevel        = $('zoom-level');
-const pdfFilename      = $('pdf-filename');
-const btnPrev          = $('btn-prev-page');
-const btnNext          = $('btn-next-page');
-const btnZoomIn        = $('btn-zoom-in');
-const btnZoomOut       = $('btn-zoom-out');
-const btnZoomFit       = $('btn-zoom-fit');
-const btnUndo          = $('btn-undo');
-const btnClear         = $('btn-clear-annotations');
-const btnExport        = $('btn-export');
-const strokeColor      = $('stroke-color');
-const statusDot        = $('status-dot');
-const btnGenerateCode  = $('btn-generate-code');
-const codeDisplay      = $('code-display');
-const codeDigits       = $('code-digits');
-const connSetup        = $('conn-setup');
-const connStatus       = $('conn-status');
-const btnDisconnect    = $('btn-disconnect');
-const vpX              = $('vp-x');
-const vpY              = $('vp-y');
-const vpZoom           = $('vp-zoom');
-const toggleRemote     = $('toggle-remote-strokes');
-const toggleSync       = $('toggle-sync-scroll');
+const screenWelcome     = $('screen-welcome');
+const screenMain        = $('screen-main');
+const fileInput         = $('file-input');
+const canvasWrapper     = $('canvas-wrapper');
+const pdfCanvas         = $('pdf-canvas');
+const annotationCanvas  = $('annotation-canvas');
+const remoteCanvas      = $('remote-canvas');
+const viewportIndicator = $('viewport-indicator');
+const pageInfo          = $('page-info');
+const zoomLevel         = $('zoom-level');
+const pdfFilename       = $('pdf-filename');
+const statusDot         = $('status-dot');
+const btnGenerateCode   = $('btn-generate-code');
+const codeDisplay       = $('code-display');
+const codeDigits        = $('code-digits');
+const connSetup         = $('conn-setup');
+const connStatus        = $('conn-status');
+const btnDisconnect     = $('btn-disconnect');
+const elVpX             = $('vp-x');
+const elVpY             = $('vp-y');
+const elVpZoom          = $('vp-zoom');
+const toggleRemote      = $('toggle-remote-strokes');
+const toggleSync        = $('toggle-sync-scroll');
+const toggleZoomLock    = $('toggle-zoom-lock-desktop');
+const strokeColor       = $('stroke-color');
 
-// ── Estado global ──────────────────────────────────────────────────────────
+// ── Estado ─────────────────────────────────────────────────────────────────
 
-let viewer     = null;
-let annotation = null;
-let peer       = null;
+let viewer      = null;
+let annotation  = null;
+let peer        = null;
 let sessionCode = null;
-let strokeId   = 0;
+let strokeId    = 0;
+let zoomLocked  = false;
 
-// ── Transição de telas ────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════
+// TELAS
+// ══════════════════════════════════════════════════════════════════════════
 
 function showMain() {
   screenWelcome.classList.remove('active');
@@ -67,97 +75,125 @@ function showMain() {
   screenMain.style.display = 'flex';
 }
 
-// ── Abertura de PDF ────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════
+// PDF
+// ══════════════════════════════════════════════════════════════════════════
 
-fileInput.addEventListener('change', async (e) => {
+$('file-input').addEventListener('change', async e => {
   const file = e.target.files[0];
   if (!file) return;
-
   pdfFilename.textContent = file.name;
   showMain();
   initCanvases();
-
-  const buffer = await file.arrayBuffer();
-  await viewer.loadFromBuffer(buffer);
+  const buf = await file.arrayBuffer();
+  await viewer.loadFromBuffer(buf);
 });
 
-btnDemo.addEventListener('click', () => {
-  pdfFilename.textContent = 'Demo (sem PDF)';
+$('btn-demo').addEventListener('click', () => {
+  pdfFilename.textContent = 'Demo';
   showMain();
   initCanvases();
 
-  // Desenha uma página demo no canvas
-  pdfCanvas.width  = 794;  // A4 ~96dpi
+  // Página demo: A4 a 96dpi
+  pdfCanvas.width  = 794;
   pdfCanvas.height = 1123;
-  annotationCanvas.width  = 794;
-  annotationCanvas.height = 1123;
-  remoteCanvas.width  = 794;
-  remoteCanvas.height = 1123;
+  syncCanvasSizes();
 
   const ctx = pdfCanvas.getContext('2d');
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, 794, 1123);
   ctx.fillStyle = '#1a1a2e';
-  ctx.font = 'bold 36px sans-serif';
+  ctx.font = 'bold 34px sans-serif';
   ctx.textAlign = 'center';
-  ctx.fillText('DigiCanvas — Modo Demo', 397, 100);
-  ctx.font = '18px sans-serif';
-  ctx.fillStyle = '#444';
-  ctx.fillText('Abra um PDF para usar como fundo', 397, 160);
-  ctx.fillStyle = '#e0e0f0';
-  ctx.fillRect(60, 220, 674, 2);
-  ctx.font = '15px sans-serif';
-  ctx.fillStyle = '#888';
-  ctx.textAlign = 'left';
-  const lines = [
-    '1. Gere um código de conexão no painel direito',
-    '2. Abra celular.html no seu smartphone',
-    '3. Digite o código gerado',
-    '4. Comece a desenhar no celular — aparece aqui!',
-    '5. Use as ferramentas acima para anotar localmente',
-  ];
-  lines.forEach((l, i) => ctx.fillText(l, 80, 270 + i * 40));
+  ctx.fillText('DigiCanvas — Modo Demo', 397, 90);
+  ctx.font = '16px sans-serif';
+  ctx.fillStyle = '#666';
+  ctx.fillText('Abra um PDF para usar como fundo', 397, 140);
+  ctx.fillStyle = '#ddd'; ctx.fillRect(60, 170, 674, 1);
+  ['Gere um código → conecte o celular', 'Desenhe no celular → aparece aqui', 'Use as ferramentas acima para anotar localmente'].forEach((t, i) => {
+    ctx.fillStyle = '#888'; ctx.textAlign = 'left';
+    ctx.fillText(`${i + 1}. ${t}`, 80, 220 + i * 45);
+  });
 
   pageInfo.textContent = '1 / 1';
+  broadcastPdfInfo();
 });
 
 function initCanvases() {
   if (annotation) return;
-  annotation = new AnnotationEngine(annotationCanvas, remoteCanvas);
 
-  annotation.onStrokeStart = ({ tool, color, size, x, y }) => {
+  annotation = new AnnotationEngine(
+    annotationCanvas,
+    remoteCanvas,
+    () => ({ w: pdfCanvas.width, h: pdfCanvas.height })
+  );
+
+  // Callbacks de stroke local → envia normalizado ao celular
+  annotation.onStrokeStart = ({ tool, color, size, nx, ny }) => {
     strokeId++;
-    const id = `h${strokeId}`;
-    annotation._currentStrokeId = id;
-    peer?.send({ type: 'stroke:start', id, tool, color, size, x, y });
+    annotation._currentStrokeId = `h${strokeId}`;
+    peer?.send({ type: 'stroke:start', id: annotation._currentStrokeId, tool, color, size, nx, ny });
   };
-
-  annotation.onStrokeMove = ({ x, y }) => {
-    peer?.send({ type: 'stroke:move', id: annotation._currentStrokeId, x, y });
+  annotation.onStrokeMove = ({ nx, ny }) => {
+    peer?.send({ type: 'stroke:move', id: annotation._currentStrokeId, nx, ny });
   };
-
   annotation.onStrokeEnd = () => {
     peer?.send({ type: 'stroke:end', id: annotation._currentStrokeId });
   };
 
   viewer = new PDFViewer(pdfCanvas);
-  viewer.onRender = (page, total, vp) => {
-    pageInfo.textContent = `${page} / ${total}`;
+  viewer.onRender = (page, total) => {
+    pageInfo.textContent  = `${page} / ${total}`;
     zoomLevel.textContent = Math.round(viewer.scale * 100) + '%';
+    syncCanvasSizes();
+    annotation.onCanvasResize();
+    broadcastPdfInfo();
   };
 }
 
-// ── Controles PDF ──────────────────────────────────────────────────────────
+/** Garante que annotation e remoteCanvas têm sempre o mesmo tamanho do pdfCanvas */
+function syncCanvasSizes() {
+  [annotationCanvas, remoteCanvas].forEach(c => {
+    c.width  = pdfCanvas.width;
+    c.height = pdfCanvas.height;
+  });
+}
 
-btnPrev.addEventListener('click', () => viewer?.prevPage());
-btnNext.addEventListener('click', () => viewer?.nextPage());
-btnZoomIn.addEventListener('click', () => viewer?.zoomIn());
-btnZoomOut.addEventListener('click', () => viewer?.zoomOut());
-btnZoomFit.addEventListener('click', () => {
-  viewer?.fitToContainer(canvasWrapper);
-});
+/**
+ * Envia ao celular:
+ *  1. O tamanho do documento (para normalização)
+ *  2. Uma miniatura de ~400px para usar como fundo
+ */
+function broadcastPdfInfo() {
+  if (!peer || peer.state !== ConnState.CONNECTED) return;
+  if (!pdfCanvas.width) return;
 
-// ── Ferramentas de anotação ────────────────────────────────────────────────
+  // Tamanho
+  peer.send({ type: 'pdf:size', w: pdfCanvas.width, h: pdfCanvas.height });
+
+  // Miniatura (max 400px de largura para não sobrecarregar o DataChannel)
+  const THUMB_W = 400;
+  const scale   = THUMB_W / pdfCanvas.width;
+  const tw      = THUMB_W;
+  const th      = Math.round(pdfCanvas.height * scale);
+  const tmp     = document.createElement('canvas');
+  tmp.width = tw; tmp.height = th;
+  tmp.getContext('2d').drawImage(pdfCanvas, 0, 0, tw, th);
+  const dataUrl = tmp.toDataURL('image/jpeg', 0.7);
+  peer.send({ type: 'pdf:thumb', data: dataUrl });
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// CONTROLES DE PDF
+// ══════════════════════════════════════════════════════════════════════════
+
+$('btn-prev-page').addEventListener('click', () => viewer?.prevPage());
+$('btn-next-page').addEventListener('click', () => viewer?.nextPage());
+$('btn-zoom-in').addEventListener('click',   () => viewer?.zoomIn());
+$('btn-zoom-out').addEventListener('click',  () => viewer?.zoomOut());
+$('btn-zoom-fit').addEventListener('click',  () => viewer?.fitToContainer(canvasWrapper));
+
+// ── Ferramentas ────────────────────────────────────────────────────────────
 
 document.querySelectorAll('.tool-btn').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -175,40 +211,39 @@ document.querySelectorAll('.size-btn').forEach(btn => {
   });
 });
 
-strokeColor.addEventListener('input', () => annotation?.setColor(strokeColor.value));
+strokeColor?.addEventListener('input', () => annotation?.setColor(strokeColor.value));
 
-btnUndo.addEventListener('click', () => {
-  annotation?.undo();
-  peer?.send({ type: 'undo' });
-});
-
-btnClear.addEventListener('click', () => {
-  annotation?.clear();
-  peer?.send({ type: 'clear' });
-});
-
-btnExport.addEventListener('click', () => {
+$('btn-undo').addEventListener('click', () => { annotation?.undo(); peer?.send({ type: 'undo' }); });
+$('btn-clear-annotations').addEventListener('click', () => { annotation?.clear(); peer?.send({ type: 'clear' }); });
+$('btn-export').addEventListener('click', () => {
   if (!annotation) return;
-  const dataURL = annotation.exportPNG();
   const a = document.createElement('a');
-  a.href     = dataURL;
-  a.download = 'digicanvas-anotacoes.png';
+  a.href = annotation.exportPNG();
+  a.download = 'digicanvas.png';
   a.click();
 });
 
-// Undo via teclado
-document.addEventListener('keydown', (e) => {
-  if ((e.ctrlKey || e.metaKey) && e.key === 'z') annotation?.undo();
+// Ctrl+Z
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'z') { annotation?.undo(); peer?.send({ type: 'undo' }); }
 });
 
 // ── Toggles ────────────────────────────────────────────────────────────────
 
-toggleRemote.addEventListener('change', () => {
+toggleRemote?.addEventListener('change', () => {
   if (annotation) annotation.showRemote = toggleRemote.checked;
   remoteCanvas.style.display = toggleRemote.checked ? 'block' : 'none';
 });
 
-// ── WebRTC / Conexão ───────────────────────────────────────────────────────
+toggleZoomLock?.addEventListener('change', () => {
+  zoomLocked = toggleZoomLock.checked;
+  peer?.send({ type: 'state:sync', zoomLocked });
+  toast(zoomLocked ? '🔒 Zoom do celular travado' : '🔓 Zoom liberado', 'info');
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// WEBRTC / CONEXÃO
+// ══════════════════════════════════════════════════════════════════════════
 
 btnGenerateCode.addEventListener('click', async () => {
   if (peer) await peer.disconnect();
@@ -218,8 +253,7 @@ btnGenerateCode.addEventListener('click', async () => {
   codeDisplay.classList.remove('hidden');
 
   peer = new DigiPeer({
-    role:  'host',
-    code:  sessionCode,
+    role: 'host', code: sessionCode,
     onStateChange: handleStateChange,
     onMessage:     handleMessage,
   });
@@ -227,8 +261,8 @@ btnGenerateCode.addEventListener('click', async () => {
   try {
     await peer.startAsHost();
   } catch (err) {
-    console.error('[Desktop] Erro ao iniciar WebRTC:', err);
-    showError(err.message);
+    toast('Erro: ' + err.message, 'error', 6000);
+    console.error('[Desktop]', err);
   }
 });
 
@@ -238,58 +272,45 @@ btnDisconnect.addEventListener('click', async () => {
   connStatus.classList.add('hidden');
   connSetup.style.display = '';
   codeDisplay.classList.add('hidden');
+  viewportIndicator.style.display = 'none';
   setStatusDot('disconnected');
 });
 
 function renderCode(code) {
   codeDigits.innerHTML = '';
-  code.split('').forEach((digit, i) => {
+  code.split('').forEach((d, i) => {
     const el = document.createElement('div');
-    el.className  = 'digit';
-    el.textContent = digit;
+    el.className = 'digit';
+    el.textContent = d;
     el.style.animationDelay = `${i * 60}ms`;
     codeDigits.appendChild(el);
   });
-
-  // Gera QR code com a URL do celular + código pré-preenchido
   renderQR(code);
 }
 
 function renderQR(code) {
   const qrEl = $('code-qr');
   if (!qrEl) return;
-
-  // URL da página do celular com o código como parâmetro
-  const base = window.location.href.replace('index.html', '').replace(/\/$/, '');
+  const base = location.href.replace(/index\.html.*$/, '').replace(/\/$/, '');
   const url  = `${base}/celular.html?code=${code}`;
-
-  // Carrega qrcode.js do CDN e gera o canvas
-  const script = document.createElement('script');
-  script.src = 'https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js';
-  script.onload = () => {
+  const load = () => {
     qrEl.innerHTML = '';
-    // eslint-disable-next-line no-undef
-    new QRCode(qrEl, {
-      text:         url,
-      width:        120,
-      height:       120,
-      colorDark:    '#7c6af7',
-      colorLight:   '#1e1e2e',
-      correctLevel: QRCode.CorrectLevel.M,
-    });
+    new QRCode(qrEl, { text: url, width: 120, height: 120, colorDark: '#7c6af7', colorLight: '#1e1e2e', correctLevel: QRCode.CorrectLevel.M });
   };
-  // Evita carregar duas vezes
   if (!document.querySelector('script[src*="qrcode"]')) {
-    document.head.appendChild(script);
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js';
+    s.onload = load;
+    document.head.appendChild(s);
   } else {
-    script.onload();
+    load();
   }
 }
 
 function handleStateChange(state) {
   setStatusDot(
-    state === ConnState.CONNECTED   ? 'connected'   :
-    state === ConnState.CONNECTING  ? 'connecting'  : 'disconnected'
+    state === ConnState.CONNECTED  ? 'connected'  :
+    state === ConnState.CONNECTING ? 'connecting' : 'disconnected'
   );
 
   if (state === ConnState.CONNECTED) {
@@ -297,13 +318,16 @@ function handleStateChange(state) {
     connStatus.classList.remove('hidden');
     viewportIndicator.style.display = 'block';
     toast('📱 Celular conectado!', 'success');
+    // Envia imediatamente o tamanho do PDF e a miniatura
+    setTimeout(broadcastPdfInfo, 300);
+    // Envia estado atual
+    peer?.send({ type: 'state:sync', zoomLocked });
   }
 
   if (state === ConnState.DISCONNECTED) {
     connStatus.classList.add('hidden');
     connSetup.style.display = '';
     viewportIndicator.style.display = 'none';
-    // Só avisa se já havia conectado antes (evita spam no início)
     if (peer) toast('Celular desconectado', 'error');
   }
 
@@ -316,67 +340,79 @@ function handleStateChange(state) {
 }
 
 function handleMessage(msg) {
-  if (!msg || !msg.type) return;
+  if (!msg?.type) return;
 
-  // Traços de anotação do celular
-  if (msg.type.startsWith('stroke:') || msg.type === 'clear' || msg.type === 'undo') {
-    annotation?.applyRemoteMessage(msg);
-    return;
-  }
+  switch (msg.type) {
+    // Traços do celular — coordenadas normalizadas
+    case 'stroke:start':
+    case 'stroke:move':
+    case 'stroke:end':
+    case 'clear':
+    case 'undo':
+      annotation?.applyRemoteMessage(msg);
+      break;
 
-  // Viewport
-  if (msg.type === 'viewport') {
-    updateViewport(msg);
-    return;
+    // Viewport do celular — normalizado
+    case 'viewport':
+      updateViewport(msg);
+      break;
+
+    // Sincronização de estado (zoom lock pelo celular)
+    case 'state:sync':
+      if (typeof msg.zoomLocked === 'boolean') {
+        zoomLocked = msg.zoomLocked;
+        if (toggleZoomLock) toggleZoomLock.checked = zoomLocked;
+        toast(zoomLocked ? '🔒 Zoom travado pelo celular' : '🔓 Zoom liberado', 'info');
+        // Re-ecoa para o celular para confirmar
+        peer?.send({ type: 'state:sync', zoomLocked });
+      }
+      break;
   }
 }
 
-// ── Viewport indicator ────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════
+// VIEWPORT INDICATOR
+// ══════════════════════════════════════════════════════════════════════════
 
 function updateViewport(msg) {
-  // msg: { type, x, y, zoom, canvasW, canvasH }
-  const { x, y, zoom, canvasW, canvasH } = msg;
+  // msg: { nx, ny, nw, nh, zoom, locked }
+  const { nx, ny, nw, nh, zoom } = msg;
 
-  vpX.textContent    = Math.round(x);
-  vpY.textContent    = Math.round(y);
-  vpZoom.textContent = zoom.toFixed(2) + '×';
+  const W = pdfCanvas.width;
+  const H = pdfCanvas.height;
 
-  if (!pdfCanvas.width) return;
+  if (!W || !H) return;
 
-  // O celular envia coordenadas no espaço do documento PDF.
-  // canvasW/H são as dimensões CSS do canvas do celular (sem DPR).
-  // Mapeamos para o espaço do canvas do desktop.
-  const scaleX = pdfCanvas.width  / canvasW;
-  const scaleY = pdfCanvas.height / canvasH;
+  // Converte normalizado → px no canvas do desktop
+  const indX = nx * W;
+  const indY = ny * H;
+  const indW = Math.max(20, nw * W);
+  const indH = Math.max(20, nh * H);
 
-  // Tamanho do viewport visível no celular em px do documento
-  const vpW = canvasW / zoom;
-  const vpH = canvasH / zoom;
+  // Clamp para não sair dos limites do canvas
+  const clampedX = Math.max(0, Math.min(indX, W - indW));
+  const clampedY = Math.max(0, Math.min(indY, H - indH));
 
-  const indX = x * scaleX;
-  const indY = y * scaleY;
-  const indW = Math.max(40, vpW * scaleX);
-  const indH = Math.max(40, vpH * scaleY);
-
-  viewportIndicator.style.left   = `${indX}px`;
-  viewportIndicator.style.top    = `${indY}px`;
+  viewportIndicator.style.left   = `${clampedX}px`;
+  viewportIndicator.style.top    = `${clampedY}px`;
   viewportIndicator.style.width  = `${indW}px`;
   viewportIndicator.style.height = `${indH}px`;
 
-  // Auto-scroll se habilitado
-  if (toggleSync.checked) {
-    const wrapper = canvasWrapper;
-    const targetScrollLeft = indX - wrapper.clientWidth  / 2 + indW / 2;
-    const targetScrollTop  = indY - wrapper.clientHeight / 2 + indH / 2;
-    wrapper.scrollTo({ left: targetScrollLeft, top: targetScrollTop, behavior: 'smooth' });
+  // Info no painel
+  if (elVpX)    elVpX.textContent    = Math.round(nx * 100) + '%';
+  if (elVpY)    elVpY.textContent    = Math.round(ny * 100) + '%';
+  if (elVpZoom) elVpZoom.textContent = (zoom ?? 1).toFixed(2) + '×';
+
+  // Auto-scroll (centra o viewport no wrapper)
+  if (toggleSync?.checked) {
+    const cx = clampedX - canvasWrapper.clientWidth  / 2 + indW / 2;
+    const cy = clampedY - canvasWrapper.clientHeight / 2 + indH / 2;
+    canvasWrapper.scrollTo({ left: cx, top: cy, behavior: 'smooth' });
   }
 }
 
-function setStatusDot(state) {
-  statusDot.className = `status-dot ${state}`;
-}
+// ── Helpers ────────────────────────────────────────────────────────────────
 
-function showError(msg) {
-  console.error('[Desktop]', msg);
-  toast('Erro: ' + msg, 'error', 5000);
+function setStatusDot(s) {
+  statusDot.className = `status-dot ${s}`;
 }
