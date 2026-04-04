@@ -216,20 +216,20 @@ function applyModeToUI(mode) {
     b.classList.toggle('active', b.dataset.pcMode === mode)
   );
   const label = $('pc-mode-label');
-  if (label) label.textContent = { draw:'Desenhar', move:'Mover caixa', resize:'Redimensionar' }[mode] ?? mode;
+  if (label) label.textContent = { draw:'Desenhar', move:'Mover caixa' }[mode] ?? mode;
 
   // Annotation recebe eventos SOMENTE no modo draw
   annotation?.setActive(mode === 'draw');
 
   // Cursor no canvas de anotação
   if (annotationCanvas) {
-    annotationCanvas.style.cursor = { draw:'crosshair', move:'default', resize:'default' }[mode] ?? 'default';
+    annotationCanvas.style.cursor = mode === 'draw' ? 'crosshair' : 'default';
   }
   // Cursor no indicator
   if (viewportIndicator) {
-    viewportIndicator.style.cursor = { draw:'default', move:'grab', resize:'nw-resize' }[mode] ?? 'default';
+    viewportIndicator.style.cursor = mode === 'move' ? 'grab' : 'default';
     // Pointer-events: só mode move/resize captura eventos no indicator
-    viewportIndicator.style.pointerEvents = mode !== 'draw' ? 'all' : 'none';
+    viewportIndicator.style.pointerEvents = mode === 'move' ? 'all' : 'none';
   }
 }
 
@@ -250,7 +250,7 @@ let vpInteraction = null; // { type:'move'|'resize', startX, startY, startNX, st
 
 viewportIndicator?.addEventListener('pointerdown', e => {
   const mode = State.get('pcMode');
-  if (mode !== 'move' && mode !== 'resize') return;
+  if (mode !== 'move') return;
   e.preventDefault(); e.stopPropagation();
   viewportIndicator.setPointerCapture(e.pointerId);
 
@@ -287,14 +287,6 @@ viewportIndicator?.addEventListener('pointermove', e => {
     positionIndicator(newVP);
     peer?.send({ type:'viewport:set', nx, ny });
 
-  } else if (vpInteraction.type === 'resize') {
-    // Resize: cresce/encolhe nw/nh; mínimo 5% do doc
-    const nw = clamp(vpInteraction.startNW + dx/W, 0.05, 1 - vpInteraction.startNX);
-    const nh = clamp(vpInteraction.startNH + dy/H, 0.05, 1 - vpInteraction.startNY);
-    const newVP = { ...State.get('viewport'), nw, nh };
-    State.set('viewport', newVP);
-    positionIndicator(newVP);
-    peer?.send({ type:'viewport:resize', nw, nh });
   }
 });
 

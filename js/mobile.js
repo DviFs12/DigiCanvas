@@ -1,15 +1,13 @@
 /**
- * mobile.js v6 — REFATORADO
- * ───────────────────────────
- * Usa: Viewport (math), MobileRenderer (rAF), State (pub/sub)
+ * mobile.js v7 — ESTÁVEL
+ * ──────────────────────
+ * Gestos simplificados e previsíveis:
+ *   1 toque → desenha
+ *   2 toques → pan + zoom (pinch)
+ *   Botão "Navegar" → força 1 toque = pan
  *
- * RESPONSABILIDADES DESTE ARQUIVO:
- *  - Input (pointer events unificados)
- *  - Conexão WebRTC
- *  - Toolbar / Menu
- *
- * NÃO faz rendering diretamente — delega ao MobileRenderer.
- * NÃO faz math de coordenadas — delega ao Viewport.
+ * SEM resize de viewport — tamanho fixo baseado na tela.
+ * Pointer events unificados, sem conflito de listeners.
  */
 
 import { DigiPeer, ConnState } from './webrtc.js';
@@ -25,8 +23,7 @@ const $ = id => document.getElementById(id);
 const screenConnect = $('screen-connect');
 const screenDraw    = $('screen-draw');
 
-// Canvases (z-index definido no HTML)
-const canvases = {
+const CANVASES = {
   bg:    $('bg-canvas'),
   thumb: $('thumb-canvas'),
   rem:   $('remote-canvas-mob'),
@@ -34,38 +31,40 @@ const canvases = {
   draw:  $('mobile-canvas'),
 };
 
-// ── Core objects ────────────────────────────────────────────────────────
-let vp  = null;  // Viewport
-let ren = null;  // MobileRenderer
-let peer = null; // DigiPeer
+// ── Core ─────────────────────────────────────────────────────────────────
+const vp  = new Viewport(794, 1123, window.innerWidth, 500);
+const ren = new MobileRenderer(CANVASES, vp);
+let peer  = null;
 
-// ── State derivado ──────────────────────────────────────────────────────
+// ── Canvas dimensions ────────────────────────────────────────────────────
 let canvasW = 0, canvasH = 0;
-const DPR = () => window.devicePixelRatio || 1;
 
-// Ferramentas
+// ── Tool state ───────────────────────────────────────────────────────────
 let currentTool  = 'pen';
 let currentColor = '#e63946';
 let currentSize  = 3;
-let isPanMode    = false;
-let isResizeMode = false;
 let palmReject   = true;
 
-// Input state
-let activePointerId = null;
-let gestureState    = 'idle'; // 'idle' | 'draw' | 'pan' | 'pinch'
+// ── Mode: 'draw' | 'pan' ─────────────────────────────────────────────────
+// 'draw'  → 1 toque desenha, 2 toques fazem pan+zoom
+// 'pan'   → 1 toque faz pan, 2 toques fazem pan+zoom
+let mode = 'draw';
+
+// ── Gesture state machine ─────────────────────────────────────────────────
+// 'idle' | 'drawing' | 'panning' | 'pinching'
+let gesture = 'idle';
+
+// Stroke em andamento
 let strokeId        = 0;
 let currentStrokeId = null;
 
-// Pinch state
-let pinchIds     = [];
-let pinchPrev    = { dist: 0, midX: 0, midY: 0 };
+// Pan — último ponto registrado
+let panLastX = 0, panLastY = 0;
 
-// Resize drag
-let resizeDragActive = false;
-let resizeDragStart  = { x: 0, y: 0, docW: 0, docH: 0 };
+// Pinch — estado anterior
+let pinchLastDist = 0, pinchLastMidX = 0, pinchLastMidY = 0;
 
-// VP broadcast timer
+// Broadcast timer
 let _vpTimer = null;
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -74,21 +73,19 @@ let _vpTimer = null;
 
 applyTheme();
 
-// Inicializa VP e Renderer com dimensões padrão — serão corrigidas no resize
-vp  = new Viewport(794, 1123, window.innerWidth, 500);
-ren = new MobileRenderer(canvases, vp);
+// Aplica prefs salvas
+;(() => {
+  const p = getPrefs();
+  palmReject = p.palmReject ?? true;
+  ren.setBgMode(p.bgMode || 'pdf');
+  ren.setGridEnabled(p.gridEnabled || false);
+  currentSize = p.size || 3;
+})();
 
-// Aplica prefs
-const prefs = getPrefs();
-palmReject = prefs.palmReject ?? true;
-ren.setBgMode(prefs.bgMode || 'pdf');
-ren.setGridEnabled(prefs.gridEnabled || false);
-
-// ── Escuta State para sincronização ──────────────────────────────────────
-
+// Sincroniza tamanho do doc ao receber do desktop
 State.on('pdfSize', ({ w, h }) => {
   vp.setDocSize(w, h);
-  ren.markDirty();
+  ren.rebake();
 });
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -98,20 +95,24 @@ State.on('pdfSize', ({ w, h }) => {
 function resizeCanvas() {
   const hud  = $('mobile-hud');
   const bar  = $('mobile-toolbar');
-  const hudH = hud?.offsetHeight ?? 52;
-  const barH = bar?.offsetHeight ?? 100;
+  const hudH = hud  ? hud.getBoundingClientRect().height  : 52;
+  const barH = bar  ? bar.getBoundingClientRect().height  : 100;
 
   canvasW = window.innerWidth;
-  canvasH = window.innerHeight - hudH - barH;
+  canvasH = Math.max(100, window.innerHeight - hudH - barH);
 
-  // Posiciona todos os canvas sobre a área de desenho
-  for (const c of Object.values(canvases)) {
+  const dpr = window.devicePixelRatio || 1;
+  const top  = hudH + 'px';
+
+  for (const c of Object.values(CANVASES)) {
     if (!c) continue;
-    c.style.top = hudH + 'px';
+    c.style.position = 'absolute';
+    c.style.left = '0px';
+    c.style.top  = top;
   }
 
   vp.setScrSize(canvasW, canvasH);
-  ren.resize(canvasW, canvasH, DPR());
+  ren.resize(canvasW, canvasH, dpr);
 }
 
 window.addEventListener('resize', () => {
@@ -119,215 +120,212 @@ window.addEventListener('resize', () => {
 });
 
 // ══════════════════════════════════════════════════════════════════════════
-// POINTER EVENTS (unificado — mouse + touch)
+// POINTER EVENTS — fonte única de verdade para input
 // ══════════════════════════════════════════════════════════════════════════
 
-function bindInputEvents() {
-  const c = canvases.draw;
-  c.addEventListener('pointerdown',   onPointerDown,   { passive: false });
-  c.addEventListener('pointermove',   onPointerMove,   { passive: false });
-  c.addEventListener('pointerup',     onPointerUp,     { passive: false });
-  c.addEventListener('pointercancel', onPointerCancel, { passive: false });
+// Rastreamento de ponteiros ativos
+const ptrs = new Map(); // pointerId → {clientX, clientY, ...}
+
+function bindInput() {
+  const c = CANVASES.draw;
+  // Garante que não adiciona listeners duplicados
+  c.removeEventListener('pointerdown',   handleDown);
+  c.removeEventListener('pointermove',   handleMove);
+  c.removeEventListener('pointerup',     handleUp);
+  c.removeEventListener('pointercancel', handleCancel);
+
+  c.addEventListener('pointerdown',   handleDown,   { passive: false });
+  c.addEventListener('pointermove',   handleMove,   { passive: false });
+  c.addEventListener('pointerup',     handleUp,     { passive: false });
+  c.addEventListener('pointercancel', handleCancel, { passive: false });
 }
 
-function getCanvasPos(e) {
-  const rect = canvases.draw.getBoundingClientRect();
-  return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+function isPalm(e) {
+  return palmReject && e.pointerType === 'touch' && (e.width > 60 || e.height > 60);
 }
 
-function isPalmEvent(e) {
-  return palmReject && e.pointerType === 'touch' &&
-    ((e.width > 50 || e.height > 50) || e.pressure > 0.85);
+function canvasXY(e) {
+  const r = CANVASES.draw.getBoundingClientRect();
+  return { x: e.clientX - r.left, y: e.clientY - r.top };
 }
 
-// ── Pointer Down ──────────────────────────────────────────────────────────
+// ── Down ──────────────────────────────────────────────────────────────────
 
-function onPointerDown(e) {
+function handleDown(e) {
   e.preventDefault();
-  if (isPalmEvent(e)) return;
+  if (isPalm(e)) return;
 
-  const active = getActivePointers();
+  ptrs.set(e.pointerId, e);
+  CANVASES.draw.setPointerCapture(e.pointerId);
 
-  if (active.length === 0) {
-    // Primeiro dedo
-    canvases.draw.setPointerCapture(e.pointerId);
-    active.push(e);
+  const count = ptrs.size;
 
-    if (isResizeMode) {
-      startResizeDrag(e);
-      gestureState = 'resize';
-    } else if (isPanMode) {
-      gestureState = 'pan';
-    } else {
-      gestureState = 'draw';
-      startDrawStroke(e);
+  if (count === 1) {
+    // Primeiro toque
+    if (gesture === 'idle') {
+      const { x, y } = canvasXY(e);
+      if (mode === 'draw') {
+        gesture = 'drawing';
+        beginStroke(x, y);
+      } else {
+        gesture = 'panning';
+        panLastX = e.clientX;
+        panLastY = e.clientY;
+      }
     }
-  } else if (active.length === 1 && e.pointerType === 'touch') {
-    // Segundo dedo — inicia pinch, cancela qualquer stroke em andamento
-    if (gestureState === 'draw') {
+  } else if (count === 2) {
+    // Segundo toque — cancela desenho se houver, inicia pinch/pan
+    if (gesture === 'drawing') {
+      // Cancela stroke local imediatamente
       ren.cancelStroke();
-      if (currentStrokeId) peer?.send({ type:'stroke:end', id:currentStrokeId });
+      if (currentStrokeId) {
+        peer?.send({ type: 'stroke:end', id: currentStrokeId });
+        currentStrokeId = null;
+      }
     }
-    gestureState = 'pinch';
-    pinchIds = [active[0].pointerId, e.pointerId];
-    updatePinchRef(active[0], e);
+    gesture = 'pinching';
+    const [a, b] = [...ptrs.values()];
+    initPinch(a, b);
   }
-
-  _trackPointer(e);
 }
 
-// ── Pointer Move ──────────────────────────────────────────────────────────
+// ── Move ──────────────────────────────────────────────────────────────────
 
-function onPointerMove(e) {
+function handleMove(e) {
   e.preventDefault();
-  _trackPointer(e);
+  ptrs.set(e.pointerId, e); // atualiza posição
 
-  if (gestureState === 'draw' && e.pointerId === activeDrawPointerId()) {
-    continueDrawStroke(e);
-  } else if (gestureState === 'pan' && e.pointerId === activeDrawPointerId()) {
-    doPan(e);
-  } else if (gestureState === 'pinch') {
-    doPinch();
-  } else if (gestureState === 'resize') {
-    doResizeDrag(e);
+  if (gesture === 'drawing') {
+    // Só o ponteiro que iniciou o stroke
+    if (e.pointerId === getFirstPointerId()) {
+      const { x, y } = canvasXY(e);
+      continueStroke(x, y);
+    }
+
+  } else if (gesture === 'panning') {
+    if (e.pointerId === getFirstPointerId()) {
+      const sens = getPrefs().panSensitivity || 1;
+      const dx = e.clientX - panLastX;
+      const dy = e.clientY - panLastY;
+      panLastX = e.clientX;
+      panLastY = e.clientY;
+      // panBy subtrai: mover dedo pra direita → conteúdo vai pra direita → vpX diminui
+      vp.panBy(dx * sens, dy * sens);
+      ren.rebake();
+    }
+
+  } else if (gesture === 'pinching') {
+    if (ptrs.size >= 2) {
+      doPinch();
+    }
   }
 }
 
-// ── Pointer Up ────────────────────────────────────────────────────────────
+// ── Up ────────────────────────────────────────────────────────────────────
 
-function onPointerUp(e) {
+function handleUp(e) {
   e.preventDefault();
-  _removePointer(e);
+  ptrs.delete(e.pointerId);
 
-  const remaining = getActivePointers();
+  const count = ptrs.size;
 
-  if (gestureState === 'draw') {
-    commitDrawStroke();
-    gestureState = 'idle';
-  } else if (gestureState === 'pinch' && remaining.length <= 1) {
-    gestureState = remaining.length === 1 ? 'pan' : 'idle';
-    pinchIds = [];
-  } else if (gestureState === 'pan' && remaining.length === 0) {
-    gestureState = 'idle';
-  } else if (gestureState === 'resize') {
-    resizeDragActive = false;
-    gestureState = 'idle';
+  if (gesture === 'drawing' && count === 0) {
+    finishStroke();
+    gesture = 'idle';
+
+  } else if (gesture === 'panning' && count === 0) {
+    gesture = 'idle';
+
+  } else if (gesture === 'pinching') {
+    if (count === 1) {
+      // Voltou pra 1 dedo — continua como pan até levantar
+      gesture = 'panning';
+      const remaining = ptrs.values().next().value;
+      panLastX = remaining.clientX;
+      panLastY = remaining.clientY;
+    } else if (count === 0) {
+      gesture = 'idle';
+    }
   }
 }
 
-function onPointerCancel(e) {
-  _removePointer(e);
-  if (gestureState === 'draw') { ren.cancelStroke(); if (currentStrokeId) peer?.send({ type:'stroke:end', id:currentStrokeId }); }
-  gestureState = 'idle'; pinchIds = [];
+function handleCancel(e) {
+  ptrs.delete(e.pointerId);
+  if (gesture === 'drawing') {
+    ren.cancelStroke();
+    if (currentStrokeId) { peer?.send({ type: 'stroke:end', id: currentStrokeId }); currentStrokeId = null; }
+  }
+  if (ptrs.size === 0) gesture = 'idle';
 }
 
-// ── Pointer tracking ──────────────────────────────────────────────────────
+function getFirstPointerId() {
+  return ptrs.keys().next().value ?? null;
+}
 
-const _pointers = new Map();
-function _trackPointer(e)  { _pointers.set(e.pointerId, e); }
-function _removePointer(e) { _pointers.delete(e.pointerId); }
-function getActivePointers() { return [..._pointers.values()]; }
-function activeDrawPointerId() { return getActivePointers()[0]?.pointerId ?? null; }
+// ══════════════════════════════════════════════════════════════════════════
+// STROKE (desenho)
+// ══════════════════════════════════════════════════════════════════════════
 
-// ── Draw ──────────────────────────────────────────────────────────────────
-
-function startDrawStroke(e) {
-  const { x, y } = getCanvasPos(e);
+function beginStroke(x, y) {
   strokeId++;
   currentStrokeId = `m${strokeId}`;
   const { nx, ny } = ren.startStroke(currentTool, currentColor, currentSize, x, y);
-  peer?.send({ type:'stroke:start', id:currentStrokeId, tool:currentTool, color:currentColor, size:currentSize, nx, ny });
+  peer?.send({ type: 'stroke:start', id: currentStrokeId,
+    tool: currentTool, color: currentColor, size: currentSize, nx, ny });
   if (getPrefs().haptic && navigator.vibrate) navigator.vibrate(8);
 }
 
-function continueDrawStroke(e) {
-  const { x, y } = getCanvasPos(e);
+function continueStroke(x, y) {
   const norm = ren.continueStroke(x, y);
-  if (norm) peer?.send({ type:'stroke:move', id:currentStrokeId, nx:norm.nx, ny:norm.ny });
-}
-
-function commitDrawStroke() {
-  ren.commitStroke();
-  if (currentStrokeId) { peer?.send({ type:'stroke:end', id:currentStrokeId }); currentStrokeId = null; }
-}
-
-// ── Pan ───────────────────────────────────────────────────────────────────
-
-let _panLast = { x: 0, y: 0 };
-function doPan(e) {
-  const { x, y } = getCanvasPos(e);
-  const prev = _panLast;
-  if (prev.x !== 0 || prev.y !== 0) {
-    const sens = getPrefs().panSensitivity || 1;
-    vp.panBy((x - prev.x) * sens, (y - prev.y) * sens);
-    ren.rebake();
+  if (norm && currentStrokeId) {
+    peer?.send({ type: 'stroke:move', id: currentStrokeId, nx: norm.nx, ny: norm.ny });
   }
-  _panLast = { x, y };
 }
 
-canvases.draw?.addEventListener('pointerdown', e => { _panLast = getCanvasPos(e); });
+function finishStroke() {
+  ren.commitStroke();
+  if (currentStrokeId) {
+    peer?.send({ type: 'stroke:end', id: currentStrokeId });
+    currentStrokeId = null;
+  }
+}
 
-// ── Pinch (zoom centrado no midpoint) ────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════
+// PINCH / PAN com 2 dedos
+// ══════════════════════════════════════════════════════════════════════════
 
-function updatePinchRef(e1, e2) {
-  const dist = Math.hypot(e1.clientX-e2.clientX, e1.clientY-e2.clientY);
-  const midX = (e1.clientX+e2.clientX)/2 - canvases.draw.getBoundingClientRect().left;
-  const midY = (e1.clientY+e2.clientY)/2 - canvases.draw.getBoundingClientRect().top;
-  pinchPrev = { dist, midX, midY };
+function initPinch(a, b) {
+  pinchLastDist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+  pinchLastMidX = (a.clientX + b.clientX) / 2;
+  pinchLastMidY = (a.clientY + b.clientY) / 2;
 }
 
 function doPinch() {
-  const ps = getActivePointers().filter(p => pinchIds.includes(p.pointerId));
-  if (ps.length < 2) return;
-  const [p1, p2] = ps;
-  const rect = canvases.draw.getBoundingClientRect();
-  const dist = Math.hypot(p1.clientX-p2.clientX, p1.clientY-p2.clientY);
-  const midX = (p1.clientX+p2.clientX)/2 - rect.left;
-  const midY = (p1.clientY+p2.clientY)/2 - rect.top;
+  const [a, b] = [...ptrs.values()];
+  const dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+  const midX = (a.clientX + b.clientX) / 2;
+  const midY = (a.clientY + b.clientY) / 2;
+  const rect = CANVASES.draw.getBoundingClientRect();
+  const fX   = midX - rect.left;
+  const fY   = midY - rect.top;
 
-  if (!State.get('viewport')?.locked) {
-    if (pinchPrev.dist > 0) {
-      const newZ = vp.z * (dist / pinchPrev.dist);
-      vp.zoomAt(newZ, midX, midY);
-    }
+  // Zoom (somente se não travado)
+  if (!State.get('viewport')?.locked && pinchLastDist > 0) {
+    const ratio = dist / pinchLastDist;
+    vp.zoomAt(vp.z * ratio, fX, fY);
   }
-  // Pan pelo mid
-  if (pinchPrev.midX !== undefined) {
+
+  // Pan via midpoint
+  if (pinchLastMidX !== 0 || pinchLastMidY !== 0) {
     const sens = getPrefs().panSensitivity || 1;
-    vp.panBy((midX - pinchPrev.midX) * sens, (midY - pinchPrev.midY) * sens);
+    vp.panBy((midX - pinchLastMidX) * sens, (midY - pinchLastMidY) * sens);
   }
 
-  pinchPrev = { dist, midX, midY };
+  pinchLastDist = dist;
+  pinchLastMidX = midX;
+  pinchLastMidY = midY;
+
   ren.rebake();
-}
-
-// ── Resize drag ───────────────────────────────────────────────────────────
-
-function startResizeDrag(e) {
-  const { x, y } = getCanvasPos(e);
-  resizeDragActive = true;
-  resizeDragStart  = { x, y, docW: vp.docW, docH: vp.docH };
-}
-
-function doResizeDrag(e) {
-  if (!resizeDragActive) return;
-  const { x, y } = getCanvasPos(e);
-  const dx = x - resizeDragStart.x;
-  const dy = y - resizeDragStart.y;
-
-  // O drag muda o "tamanho visível" — equivale a ajustar o zoom
-  // Aumentar drag → ver mais → zoom out; diminuir → zoom in
-  const newVisW = Math.max(50, canvasW + dx);
-  const newVisH = Math.max(50, canvasH + dy);
-  const zFromW  = canvasW / newVisW;
-  const zFromH  = canvasH / newVisH;
-
-  if (!State.get('viewport')?.locked) {
-    vp.zoomAt(Math.min(zFromW, zFromH), canvasW / 2, canvasH / 2);
-    ren.rebake();
-    broadcastVP();
-    peer?.send({ type:'viewport:resize', ...vp.toNormState() });
-  }
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -336,13 +334,13 @@ function doResizeDrag(e) {
 
 function broadcastVP() {
   if (peer?.state === ConnState.CONNECTED) {
-    peer.send({ type:'viewport', ...vp.toNormState() });
+    peer.send({ type: 'viewport', ...vp.toNormState() });
   }
 }
 
 function startViewportBroadcast() {
   if (_vpTimer) return;
-  _vpTimer = setInterval(broadcastVP, 40); // ~25fps para posição
+  _vpTimer = setInterval(broadcastVP, 40);
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -352,31 +350,37 @@ function startViewportBroadcast() {
 const codeChars = [...document.querySelectorAll('.code-char')];
 codeChars.forEach((inp, i) => {
   inp.addEventListener('input', e => {
-    const v = e.target.value.replace(/\D/,''); inp.value = v;
+    const v = e.target.value.replace(/\D/, ''); inp.value = v;
     inp.classList.toggle('filled', !!v);
-    if (v && i < codeChars.length-1) codeChars[i+1].focus();
+    if (v && i < codeChars.length - 1) codeChars[i + 1].focus();
     checkCode();
   });
   inp.addEventListener('keydown', e => {
     if (e.key === 'Backspace' && !inp.value && i > 0) {
-      codeChars[i-1].focus(); codeChars[i-1].value = ''; codeChars[i-1].classList.remove('filled');
+      codeChars[i - 1].focus();
+      codeChars[i - 1].value = '';
+      codeChars[i - 1].classList.remove('filled');
     }
   });
   inp.addEventListener('paste', e => {
     e.preventDefault();
-    const t = e.clipboardData.getData('text').replace(/\D/g,'').slice(0,6);
-    t.split('').forEach((c,j) => { if (codeChars[j]) { codeChars[j].value = c; codeChars[j].classList.add('filled'); } });
+    const t = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, 6);
+    t.split('').forEach((c, j) => {
+      if (codeChars[j]) { codeChars[j].value = c; codeChars[j].classList.add('filled'); }
+    });
     checkCode();
   });
 });
 
 const getCode   = () => codeChars.map(i => i.value).join('');
-const checkCode = () => { const b=$('btn-connect'); if (b) b.disabled = getCode().length < 6; };
+const checkCode = () => { const b = $('btn-connect'); if (b) b.disabled = getCode().length < 6; };
 
 ;(function autoFill() {
   const code = new URLSearchParams(location.search).get('code');
   if (code && /^\d{6}$/.test(code)) {
-    code.split('').forEach((c,i) => { if (codeChars[i]) { codeChars[i].value=c; codeChars[i].classList.add('filled'); } });
+    code.split('').forEach((c, i) => {
+      if (codeChars[i]) { codeChars[i].value = c; codeChars[i].classList.add('filled'); }
+    });
     checkCode();
     setTimeout(() => $('btn-connect')?.click(), 500);
   }
@@ -387,218 +391,226 @@ const checkCode = () => { const b=$('btn-connect'); if (b) b.disabled = getCode(
 // ══════════════════════════════════════════════════════════════════════════
 
 $('btn-connect')?.addEventListener('click', async () => {
-  const code = getCode(); if (code.length < 6) return;
-  setStatus('connecting','Conectando…'); $('btn-connect').disabled = true;
-  peer = new DigiPeer({ role:'guest', code, onStateChange:handleStateChange, onMessage:handleMessage });
+  const code = getCode();
+  if (code.length < 6) return;
+  setStatus('connecting', 'Conectando…');
+  $('btn-connect').disabled = true;
+  peer = new DigiPeer({ role: 'guest', code, onStateChange: onConnState, onMessage: onMsg });
   try { await peer.startAsGuest(); }
   catch (err) { setStatus('error', err.message.split('\n')[0]); $('btn-connect').disabled = false; }
 });
 
-function handleStateChange(state) {
+function onConnState(state) {
   State.set('connected', state === ConnState.CONNECTED);
   if (state === ConnState.CONNECTED) {
-    setStatus('success','Conectado!');
+    setStatus('success', 'Conectado!');
     setTimeout(showDrawScreen, 400);
   } else if (state === ConnState.DISCONNECTED) {
-    const st=$('mobile-status-text'); if (st) st.textContent='Desconectado';
-    $('mobile-status-dot')?.classList.replace('connected','disconnected');
+    setText('mobile-status-text', 'Desconectado');
+    $('mobile-status-dot')?.classList.replace('connected', 'disconnected');
     if (screenDraw.classList.contains('active')) {
-      toast('Conexão perdida','error');
+      toast('Conexão perdida', 'error');
       setTimeout(() => {
-        screenDraw.classList.remove('active'); screenDraw.style.display='';
-        screenConnect.classList.add('active'); $('btn-connect').disabled=false; setStatus('','');
+        screenDraw.classList.remove('active'); screenDraw.style.display = '';
+        screenConnect.classList.add('active');
+        $('btn-connect').disabled = false; setStatus('', '');
       }, 1500);
     }
   } else if (state === ConnState.ERROR) {
-    setStatus('error','Falha na conexão'); $('btn-connect').disabled=false;
+    setStatus('error', 'Falha na conexão');
+    $('btn-connect').disabled = false;
   }
 }
 
-function handleMessage(msg) {
+function onMsg(msg) {
   if (!msg?.type) return;
   switch (msg.type) {
+    // Traços do PC → celular
+    case 'stroke:start': ren.remoteStart(msg.id, msg.tool, msg.color, msg.size, msg.nx, msg.ny); break;
+    case 'stroke:move':  ren.remoteMove(msg.id, msg.nx, msg.ny);  break;
+    case 'stroke:end':   ren.remoteEnd(msg.id);                   break;
 
-    // ── Traços do PC → aparecem no celular ──────────────────────────────
-    case 'stroke:start':
-      ren.remoteStart(msg.id, msg.tool, msg.color, msg.size, msg.nx, msg.ny); break;
-    case 'stroke:move':
-      ren.remoteMove(msg.id, msg.nx, msg.ny); break;
-    case 'stroke:end':
-      ren.remoteEnd(msg.id); break;
-
-    // ── Limpeza ──────────────────────────────────────────────────────────
+    // Limpeza
     case 'clear:all':    ren.clearAll();    break;
-    case 'clear:local':  ren.clearMobile(); break; // PC pede que celular limpe seus traços
-    case 'clear:remote': ren.clearPC();     break; // PC limpou traços remotos (celular visualmente)
-    case 'clear':        ren[State.get('clearMode')==='shared'?'clearAll':'clearMobile'](); break;
+    case 'clear:local':  ren.clearMobile(); break;
+    case 'clear:remote': ren.clearPC();     break;
+    case 'clear':        ren.clearAll();    break;
 
-    // ── Undo/Redo do PC ──────────────────────────────────────────────────
-    case 'undo': ren.undoPC();  toast('↩ PC desfez','info',1200); break;
-    case 'redo': ren.markDirty(); toast('↪ PC refez','info',1200); break;
+    // Undo/Redo do PC
+    case 'undo': ren.undoPC();    toast('↩ PC', 'info', 1000); break;
+    case 'redo': ren.rebake();    toast('↪ PC', 'info', 1000); break;
 
-    // ── PDF info ─────────────────────────────────────────────────────────
+    // PDF
     case 'pdf:size':
       State.set('pdfSize', { w: msg.w, h: msg.h });
       vp.setDocSize(msg.w, msg.h);
-      ren.markDirty();
+      ren.rebake();
       break;
-    case 'pdf:thumb':
+    case 'pdf:thumb': {
       const img = new Image();
-      img.onload = () => { ren.setThumb(img); };
+      img.onload = () => ren.setThumb(img);
       img.src = msg.data;
       break;
+    }
 
-    // ── Controle de estado ───────────────────────────────────────────────
+    // Sync de estado
     case 'state:sync':
       if (typeof msg.zoomLocked === 'boolean') {
         State.merge('viewport', { locked: msg.zoomLocked });
-        const el=$('toggle-zoom-lock'); if (el) el.checked=msg.zoomLocked;
-        toast(msg.zoomLocked?'🔒 Zoom travado':'🔓 Zoom liberado','info');
+        const el = $('toggle-zoom-lock'); if (el) el.checked = msg.zoomLocked;
+        toast(msg.zoomLocked ? '🔒 Zoom travado' : '🔓 Zoom liberado', 'info');
       }
       if (typeof msg.gridEnabled === 'boolean') {
         ren.setGridEnabled(msg.gridEnabled);
-        const el=$('toggle-grid-mob'); if (el) el.checked=msg.gridEnabled;
+        const el = $('toggle-grid-mob'); if (el) el.checked = msg.gridEnabled;
       }
       if (msg.clearMode) State.set('clearMode', msg.clearMode);
       break;
 
-    // ── Teleporte do viewport (PC arrastou indicador) ────────────────────
+    // PC moveu o indicador
     case 'viewport:set':
       vp.moveTo(msg.nx * vp.docW, msg.ny * vp.docH);
-      ren.rebake(); break;
-
-    // ── PC redimensionou o viewport ───────────────────────────────────────
-    case 'viewport:resize':
-      if (!State.get('viewport')?.locked && msg.nw > 0 && msg.nh > 0) {
-        vp.fromNormState(msg);
-        ren.rebake();
-      }
+      ren.rebake();
       break;
   }
 }
 
 function setStatus(type, text) {
-  const s=$('connect-status'); if (s) s.className=`connect-status ${type}`;
-  const m=$('connect-msg');    if (m) m.textContent=text;
+  const s = $('connect-status'); if (s) s.className = `connect-status ${type}`;
+  const m = $('connect-msg');    if (m) m.textContent = text;
+}
+
+function setText(id, text) {
+  const el = $(id); if (el) el.textContent = text;
 }
 
 function showDrawScreen() {
   screenConnect.classList.remove('active');
-  screenDraw.classList.add('active'); screenDraw.style.display='flex';
-  const st=$('mobile-status-text'); if (st) st.textContent='Conectado';
-  const sd=$('mobile-status-dot');  if (sd) sd.className='status-dot connected';
-  peer?.send({ type:'request:pdf' });
+  screenDraw.classList.add('active');
+  screenDraw.style.display = 'flex';
+  setText('mobile-status-text', 'Conectado');
+  const sd = $('mobile-status-dot');
+  if (sd) sd.className = 'status-dot connected';
+  peer?.send({ type: 'request:pdf' });
   resizeCanvas();
-  bindInputEvents();
+  bindInput();
   startViewportBroadcast();
   applyMenuPrefs();
 }
 
 function applyMenuPrefs() {
   const p = getPrefs();
-  const s=$('bg-select');      if (s) s.value = p.bgMode||'pdf';
-  const r=$('size-slider');    if (r) { r.value = p.size||3; updateSizeLabel(p.size||3); }
-  const ps=$('pan-sensitivity'); if (ps) ps.value = p.panSensitivity||1;
-  const hp=$('toggle-haptic'); if (hp) hp.checked = p.haptic??true;
-  const pl=$('toggle-palm');   if (pl) pl.checked = p.palmReject??true;
-  const gl=$('toggle-zoom-lock'); if (gl) gl.checked = State.get('viewport')?.locked??false;
-  const gm=$('toggle-grid-mob'); if (gm) gm.checked = p.gridEnabled??false;
+  const s = $('bg-select');       if (s)  s.value   = p.bgMode || 'pdf';
+  const r = $('size-slider');     if (r)  r.value   = p.size || 3; updateSizeLabel(p.size || 3);
+  const ps = $('pan-sensitivity');if (ps) ps.value  = p.panSensitivity || 1;
+  const hp = $('toggle-haptic'); if (hp) hp.checked = p.haptic ?? true;
+  const pl = $('toggle-palm');   if (pl) pl.checked = p.palmReject ?? true;
+  const gl = $('toggle-zoom-lock'); if (gl) gl.checked = State.get('viewport')?.locked ?? false;
+  const gm = $('toggle-grid-mob');  if (gm) gm.checked = p.gridEnabled ?? false;
 }
 
 // ══════════════════════════════════════════════════════════════════════════
 // TOOLBAR
 // ══════════════════════════════════════════════════════════════════════════
 
+// Ferramentas de desenho
 document.querySelectorAll('.mob-tool[data-tool]').forEach(btn => {
   btn.addEventListener('click', () => {
     const tool = btn.dataset.tool;
 
     if (tool === 'pan') {
-      isPanMode = !isPanMode; isResizeMode = false;
-      btn.classList.toggle('active', isPanMode);
-      $('btn-resize-mode')?.classList.remove('active');
+      // Toggle pan mode
+      mode = (mode === 'pan') ? 'draw' : 'pan';
+      btn.classList.toggle('active', mode === 'pan');
       document.querySelectorAll('.mob-tool[data-tool]:not([data-tool="pan"])').forEach(b =>
-        b.classList.toggle('active', !isPanMode && b.dataset.tool === currentTool)
+        b.classList.toggle('active', mode === 'draw' && b.dataset.tool === currentTool)
       );
-      const ml=$('mobile-mode-label'); if (ml) ml.textContent = isPanMode?'Navegar':'Desenho';
+      setText('mobile-mode-label', mode === 'pan' ? 'Navegar' : 'Desenho');
       return;
     }
 
-    isPanMode=false; isResizeMode=false;
-    document.querySelector('.mob-tool[data-tool="pan"]')?.classList.remove('active');
-    $('btn-resize-mode')?.classList.remove('active');
-    document.querySelectorAll('.mob-tool[data-tool]').forEach(b=>b.classList.remove('active'));
+    // Ferramenta de desenho
+    mode = 'draw';
+    document.querySelectorAll('.mob-tool[data-tool]').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
-    currentTool=tool;
-    const ml=$('mobile-mode-label'); if (ml) ml.textContent='Desenho';
+    currentTool = tool;
+    setText('mobile-mode-label', 'Desenho');
   });
 });
 
-$('btn-resize-mode')?.addEventListener('click', () => {
-  isResizeMode = !isResizeMode; isPanMode=false;
-  $('btn-resize-mode')?.classList.toggle('active', isResizeMode);
-  if (isResizeMode) document.querySelectorAll('.mob-tool[data-tool]').forEach(b=>b.classList.remove('active'));
-  const ml=$('mobile-mode-label'); if (ml) ml.textContent=isResizeMode?'Resize':'Desenho';
-  toast(isResizeMode?'📐 Arraste para redimensionar viewport':'Modo de desenho','info',1500);
-});
-
+// Cores rápidas
 document.querySelectorAll('.quick-color').forEach(btn => {
   btn.addEventListener('click', () => {
-    document.querySelectorAll('.quick-color').forEach(b=>b.classList.remove('active'));
-    btn.classList.add('active'); currentColor=btn.dataset.color;
-    const inp=$('mob-color'); if (inp) inp.value=currentColor;
+    document.querySelectorAll('.quick-color').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentColor = btn.dataset.color;
+    const inp = $('mob-color'); if (inp) inp.value = currentColor;
   });
 });
 $('mob-color')?.addEventListener('input', e => {
-  currentColor=e.target.value;
-  document.querySelectorAll('.quick-color').forEach(b=>b.classList.remove('active'));
+  currentColor = e.target.value;
+  document.querySelectorAll('.quick-color').forEach(b => b.classList.remove('active'));
 });
 
+// Slider de espessura
 function updateSizeLabel(v) {
-  const lbl=$('size-slider-label'); if (lbl) lbl.textContent=v;
-  const dot=$('size-preview-dot');
-  if (dot) { const px=Math.min(48,Math.max(2,v)); dot.style.width=px+'px'; dot.style.height=px+'px'; }
+  const lbl = $('size-slider-label'); if (lbl) lbl.textContent = v;
+  const dot = $('size-preview-dot');
+  if (dot) { const px = Math.min(48, Math.max(2, v)); dot.style.width = px + 'px'; dot.style.height = px + 'px'; }
 }
 $('size-slider')?.addEventListener('input', e => {
-  currentSize=parseInt(e.target.value); updateSizeLabel(currentSize); setPref('size',currentSize);
+  currentSize = parseInt(e.target.value);
+  updateSizeLabel(currentSize);
+  setPref('size', currentSize);
 });
 
+// Undo / Clear
 $('btn-mob-undo')?.addEventListener('click', () => {
-  if (ren.undoMobile()) peer?.send({ type:'undo' });
+  if (ren.undoMobile()) peer?.send({ type: 'undo' });
 });
 $('btn-mob-clear')?.addEventListener('click', () => {
-  ren.clearMobile(); peer?.send({ type:'clear:local' });
+  ren.clearMobile();
+  peer?.send({ type: 'clear:local' });
 });
+
+// Desconectar
 $('btn-mob-disconnect')?.addEventListener('click', async () => {
-  clearInterval(_vpTimer); _vpTimer=null;
+  clearInterval(_vpTimer); _vpTimer = null;
   await peer?.disconnect();
-  screenDraw.classList.remove('active'); screenDraw.style.display='';
+  peer = null;
+  screenDraw.classList.remove('active'); screenDraw.style.display = '';
   screenConnect.classList.add('active');
-  codeChars.forEach(i=>{i.value='';i.classList.remove('filled');}); checkCode(); setStatus('','');
+  codeChars.forEach(i => { i.value = ''; i.classList.remove('filled'); });
+  checkCode(); setStatus('', '');
   ren.clearAll();
+  gesture = 'idle'; ptrs.clear();
 });
 
-$('btn-mobile-menu')?.addEventListener('click', ()=>$('mobile-menu')?.classList.remove('hidden'));
-$('btn-close-menu')?.addEventListener('click',  ()=>$('mobile-menu')?.classList.add('hidden'));
+// Menu lateral
+$('btn-mobile-menu')?.addEventListener('click', () => $('mobile-menu')?.classList.remove('hidden'));
+$('btn-close-menu')?.addEventListener('click',  () => $('mobile-menu')?.classList.add('hidden'));
 
+// Toggles
 $('toggle-zoom-lock')?.addEventListener('change', e => {
   State.merge('viewport', { locked: e.target.checked });
   setPref('zoomLocked', e.target.checked);
-  peer?.send({ type:'state:sync', zoomLocked:e.target.checked });
-  toast(e.target.checked?'🔒 Zoom travado':'🔓 Zoom liberado','info');
+  peer?.send({ type: 'state:sync', zoomLocked: e.target.checked });
+  toast(e.target.checked ? '🔒 Zoom travado' : '🔓 Zoom liberado', 'info');
 });
 $('toggle-grid-mob')?.addEventListener('change', e => {
-  ren.setGridEnabled(e.target.checked); setPref('gridEnabled',e.target.checked);
+  ren.setGridEnabled(e.target.checked);
+  setPref('gridEnabled', e.target.checked);
 });
-$('toggle-palm')?.addEventListener('change', e => { palmReject=e.target.checked; setPref('palmReject',palmReject); });
-$('toggle-haptic')?.addEventListener('change', e => setPref('haptic',e.target.checked));
-$('pan-sensitivity')?.addEventListener('input', e => setPref('panSensitivity',parseFloat(e.target.value)));
-$('bg-select')?.addEventListener('change', e => { ren.setBgMode(e.target.value); setPref('bgMode',e.target.value); });
+$('toggle-palm')?.addEventListener('change',   e => { palmReject = e.target.checked; setPref('palmReject', palmReject); });
+$('toggle-haptic')?.addEventListener('change', e => setPref('haptic', e.target.checked));
+$('pan-sensitivity')?.addEventListener('input', e => setPref('panSensitivity', parseFloat(e.target.value)));
+$('bg-select')?.addEventListener('change', e => { ren.setBgMode(e.target.value); setPref('bgMode', e.target.value); });
 
+// Temas
 document.querySelectorAll('[data-theme-btn]').forEach(btn => {
-  btn.addEventListener('click', ()=>{
+  btn.addEventListener('click', () => {
     setTheme(btn.dataset.themeBtn);
-    document.querySelectorAll('[data-theme-btn]').forEach(b=>b.classList.toggle('active',b===btn));
-    toast('Tema: '+btn.dataset.themeBtn,'info');
+    document.querySelectorAll('[data-theme-btn]').forEach(b => b.classList.toggle('active', b === btn));
+    toast('Tema: ' + btn.dataset.themeBtn, 'info');
   });
 });

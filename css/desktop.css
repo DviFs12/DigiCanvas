@@ -139,3 +139,95 @@ kbd{font-family:var(--font-mono);font-size:10px;padding:2px 6px;background:var(-
 
 /* ── HINT INLINE ── */
 .hint-inline{font-size:9px;opacity:.6}
+
+/* ══════════════════════════════════════════════════════
+   TOOLBAR DROPDOWNS — corrigido (position:relative no wrap,
+   dropdown abre para baixo sem afetar fluxo da página)
+   ══════════════════════════════════════════════════════ */
+
+.toolbar-dropdown-wrap {
+  position: relative;      /* âncora do dropdown */
+  display:  inline-flex;
+  align-items: center;
+  gap: 0;
+}
+
+/* Seta que abre o menu */
+.dropdown-arrow {
+  width: 14px !important;
+  height: 30px !important;
+  padding: 0 !important;
+  font-size: 9px !important;
+  border-radius: 0 5px 5px 0 !important;
+  border-left: 1px solid rgba(255,255,255,0.08) !important;
+  background: transparent !important;
+  color: var(--text-muted) !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+.dropdown-arrow:hover { background: var(--surface) !important; color: var(--text) !important; }
+
+/* Dropdown — position:absolute relativo ao wrap, não ao body */
+.toolbar-dropdown {
+  display:    none;          /* oculto por padrão */
+  position:   absolute;
+  top:        calc(100% + 4px);   /* logo abaixo da toolbar */
+  right:      0;
+  z-index:    200;
+  min-width:  180px;
+  background: var(--surface2);
+  border:     1px solid var(--border2);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+  overflow:   hidden;
+  /* NÃO afeta o fluxo da toolbar — é absoluto */
+}
+
+.toolbar-dropdown.open {
+  display: flex;
+  flex-direction: column;
+}
+
+.toolbar-dropdown button {
+  width: 100% !important;
+  height: auto !important;
+  padding: 9px 14px !important;
+  border-radius: 0 !important;
+  text-align: left !important;
+  font-size: 12px !important;
+  font-family: var(--font-sans) !important;
+  color: var(--text-dim) !important;
+  border-bottom: 1px solid var(--border) !important;
+  justify-content: flex-start !important;
+}
+.toolbar-dropdown button:last-child { border-bottom: none !important; }
+.toolbar-dropdown button:hover { background: var(--bg3) !important; color: var(--text) !important; }
+
+/* Remove estilos antigos de .split-btn que causavam overflow */
+.split-btn { display: none; }
+
+/* Modo buttons — apenas 2 (draw + move) */
+.mode-group {
+  display: flex; gap: 2px;
+  background: var(--bg);
+  border-radius: 7px; padding: 2px;
+  border: 1px solid var(--border);
+}
+.mode-btn {
+  width: 28px !important; height: 28px !important;
+  border-radius: 5px !important; font-size: 14px !important;
+  cursor: pointer; border: none; background: transparent;
+  transition: var(--trans);
+}
+.mode-btn:hover { background: var(--surface); }
+.mode-btn.active { background: var(--accent) !important; box-shadow: 0 0 8px var(--accent-glow); }
+.mode-label { font-size: 10px; color: var(--text-muted); min-width: 54px; }
+
+/* Slider de espessura na toolbar */
+.size-slider-wrap {
+  display: flex; align-items: center; gap: 5px; padding: 0 4px;
+}
+.size-slider-wrap input[type=range] {
+  width: 70px; accent-color: var(--accent); height: 4px;
+}
