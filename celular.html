@@ -15,18 +15,13 @@
 </head>
 <body class="mobile-mode">
 
-<!-- ═══════════════════ TELA DE CONEXÃO ═════════════════════ -->
+<!-- ══ TELA DE CONEXÃO ══ -->
 <div id="screen-connect" class="screen active">
-  <div class="mobile-bg">
-    <div class="glow-orb orb-mobile"></div>
-  </div>
+  <div class="mobile-bg"><div class="glow-orb orb-mobile"></div></div>
   <div class="connect-content">
-    <div class="logo-mark small">
-      <svg viewBox="0 0 60 60" fill="none"><rect x="4" y="4" width="52" height="52" rx="8" stroke="var(--accent)" stroke-width="2"/><path d="M16 44 L28 20 L34 32 L40 24 L46 44" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="46" cy="16" r="5" fill="var(--accent2)" opacity="0.8"/></svg>
-    </div>
+    <div class="logo-mark small"><svg viewBox="0 0 60 60" fill="none"><rect x="4" y="4" width="52" height="52" rx="8" stroke="var(--accent)" stroke-width="2"/><path d="M16 44 L28 20 L34 32 L40 24 L46 44" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="46" cy="16" r="5" fill="var(--accent2)" opacity="0.8"/></svg></div>
     <h1>DigiCanvas</h1>
     <p class="subtitle">Mesa digitalizadora</p>
-
     <div class="code-input-section">
       <label class="input-label">Código da sessão (6 dígitos)</label>
       <div class="code-inputs">
@@ -42,30 +37,25 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
         Conectar
       </button>
-      <div id="connect-status" class="connect-status">
-        <span id="connect-msg"></span>
-      </div>
+      <div id="connect-status" class="connect-status"><span id="connect-msg"></span></div>
     </div>
-
     <div class="connect-note">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-      Abra <strong>index.html</strong> no computador e clique em <strong>Gerar Código</strong>
+      Abra <strong>index.html</strong> no PC → <strong>Gerar Código</strong>
     </div>
   </div>
 </div>
 
-<!-- ═══════════════════ TELA DE DESENHO ═════════════════════ -->
+<!-- ══ TELA DE DESENHO ══ -->
 <div id="screen-draw" class="screen">
 
-  <!-- HUD topo -->
+  <!-- HUD -->
   <div id="mobile-hud">
     <div class="hud-left">
       <div id="mobile-status-dot" class="status-dot connected"></div>
       <span id="mobile-status-text" class="hud-status">Conectado</span>
     </div>
-    <div class="hud-center">
-      <span id="mobile-mode-label" class="hud-mode">Desenho</span>
-    </div>
+    <div class="hud-center"><span id="mobile-mode-label" class="hud-mode">Desenho</span></div>
     <div class="hud-right">
       <button id="btn-mobile-menu" class="icon-btn" aria-label="Menu">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
@@ -73,121 +63,100 @@
     </div>
   </div>
 
-  <!-- Canvases sobrepostos -->
-  <canvas id="grid-canvas-mob" style="pointer-events:none;z-index:2;position:absolute;"></canvas>
-  <canvas id="mobile-canvas" style="z-index:3;position:absolute;touch-action:none;"></canvas>
+  <!-- CAMADAS DE CANVAS (z-index crescente) -->
+  <!-- Bug #11: cada camada é independente; eraser não toca nas inferiores -->
+  <canvas id="bg-canvas"          style="position:absolute;z-index:1;pointer-events:none;"></canvas>
+  <canvas id="thumb-canvas"       style="position:absolute;z-index:2;pointer-events:none;"></canvas>
+  <canvas id="remote-canvas-mob"  style="position:absolute;z-index:3;pointer-events:none;"></canvas><!-- Bug #10 -->
+  <canvas id="grid-canvas-mob"    style="position:absolute;z-index:4;pointer-events:none;"></canvas>
+  <canvas id="mobile-canvas"      style="position:absolute;z-index:5;touch-action:none;"></canvas>
 
-  <!-- ══ TOOLBAR INFERIOR MODERNA ══ -->
+  <!-- TOOLBAR INFERIOR -->
   <div id="mobile-toolbar">
-
     <!-- Linha 1: ferramentas -->
     <div class="toolbar-row tools-row">
-      <button class="mob-tool active" data-tool="pen" aria-label="Caneta">
+      <button class="mob-tool active" data-tool="pen">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/></svg>
         <span>Caneta</span>
       </button>
-      <button class="mob-tool" data-tool="marker" aria-label="Marcador">
+      <button class="mob-tool" data-tool="marker">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25z"/><path d="M20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
         <span>Marcador</span>
       </button>
-      <button class="mob-tool" data-tool="highlighter" aria-label="Marca-texto">
+      <button class="mob-tool" data-tool="highlighter">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 3L5 21"/><path d="M15 3l4 18"/><path d="M3 9h18"/><path d="M3 15h18"/></svg>
         <span>Marca-texto</span>
       </button>
-      <button class="mob-tool" data-tool="eraser" aria-label="Borracha">
+      <button class="mob-tool" data-tool="eraser">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 20H7L3 16l10-10 7 7-3 4"/><path d="M7 20l4-4"/></svg>
         <span>Borracha</span>
       </button>
       <div class="tool-divider"></div>
-      <button class="mob-tool" data-tool="pan" id="btn-pan-mode" aria-label="Navegar">
+      <button class="mob-tool" data-tool="pan" id="btn-pan-mode">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 9l-3 3 3 3M9 5l3-3 3 3M15 19l-3 3-3-3M19 9l3 3-3 3M2 12h20M12 2v20"/></svg>
         <span>Navegar</span>
       </button>
+      <button class="mob-tool" id="btn-resize-mode">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+        <span>Resize</span>
+      </button>
     </div>
 
-    <!-- Linha 2: cores + espessura + ações -->
+    <!-- Linha 2: cores + espessura slider + ações -->
     <div class="toolbar-row options-row">
-
-      <!-- Cores rápidas -->
       <div class="quick-colors">
-        <button class="quick-color active" data-color="#e63946" style="--c:#e63946" title="Vermelho"></button>
-        <button class="quick-color" data-color="#4cc9f0"  style="--c:#4cc9f0"  title="Azul"></button>
-        <button class="quick-color" data-color="#2dc653"  style="--c:#2dc653"  title="Verde"></button>
-        <button class="quick-color" data-color="#f7c559"  style="--c:#f7c559"  title="Amarelo"></button>
-        <button class="quick-color" data-color="#ffffff"  style="--c:#ffffff"  title="Branco"></button>
-        <button class="quick-color" data-color="#000000"  style="--c:#000000"  title="Preto"></button>
-        <input type="color" id="mob-color" value="#e63946" title="Cor personalizada" />
+        <button class="quick-color active" data-color="#e63946" style="--c:#e63946"></button>
+        <button class="quick-color" data-color="#4cc9f0"  style="--c:#4cc9f0"></button>
+        <button class="quick-color" data-color="#2dc653"  style="--c:#2dc653"></button>
+        <button class="quick-color" data-color="#f7c559"  style="--c:#f7c559"></button>
+        <button class="quick-color" data-color="#ffffff"  style="--c:#ffffff"></button>
+        <button class="quick-color" data-color="#000000"  style="--c:#000000"></button>
+        <input type="color" id="mob-color" value="#e63946" />
       </div>
-
       <div class="options-divider"></div>
-
-      <!-- Espessuras -->
-      <div class="mob-sizes">
-        <button class="mob-size active" data-size="2"  title="Fino"><span class="size-dot" style="--s:2px"></span></button>
-        <button class="mob-size"        data-size="4"  title="Médio"><span class="size-dot" style="--s:4px"></span></button>
-        <button class="mob-size"        data-size="8"  title="Grosso"><span class="size-dot" style="--s:8px"></span></button>
-        <button class="mob-size"        data-size="16" title="Extra grosso"><span class="size-dot" style="--s:12px"></span></button>
+      <!-- Slider de espessura (#4) -->
+      <div class="size-slider-mob">
+        <div class="size-preview-wrap"><div id="size-preview-dot" class="size-preview-dot"></div></div>
+        <input type="range" id="size-slider" min="1" max="100" value="3" />
+        <span id="size-slider-label" class="size-slider-num">3</span>
       </div>
-
       <div class="options-divider"></div>
-
-      <!-- Ações -->
-      <button id="btn-mob-undo" class="action-btn" title="Desfazer">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg>
-      </button>
-      <button id="btn-mob-clear" class="action-btn" title="Limpar">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
-      </button>
-
+      <button id="btn-mob-undo"  class="action-btn" title="Desfazer"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg></button>
+      <button id="btn-mob-clear" class="action-btn" title="Limpar meus traços"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg></button>
     </div>
   </div>
 
-  <!-- ══ MENU LATERAL ══ -->
+  <!-- MENU LATERAL -->
   <div id="mobile-menu" class="side-menu hidden">
     <div class="menu-header">
       <span>Configurações</span>
       <button id="btn-close-menu" class="icon-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
     <div class="menu-body">
-
       <div class="menu-group">
         <div class="menu-group-title">Desenho</div>
-        <label class="toggle-row">
-          <span>Haptic feedback</span>
-          <input type="checkbox" id="toggle-haptic" checked /><span class="toggle-knob"></span>
-        </label>
-        <label class="toggle-row">
-          <span>Palm reject</span>
-          <input type="checkbox" id="toggle-palm" checked /><span class="toggle-knob"></span>
-        </label>
+        <label class="toggle-row"><span>Haptic</span><input type="checkbox" id="toggle-haptic" checked /><span class="toggle-knob"></span></label>
+        <label class="toggle-row"><span>Palm reject</span><input type="checkbox" id="toggle-palm" checked /><span class="toggle-knob"></span></label>
       </div>
-
       <div class="menu-group">
         <div class="menu-group-title">Viewport</div>
-        <label class="toggle-row">
-          <span>🔒 Travar zoom</span>
-          <input type="checkbox" id="toggle-zoom-lock" /><span class="toggle-knob"></span>
-        </label>
-        <label class="toggle-row">
-          <span>Grade de referência</span>
-          <input type="checkbox" id="toggle-grid-mob" /><span class="toggle-knob"></span>
-        </label>
+        <label class="toggle-row"><span>🔒 Travar zoom</span><input type="checkbox" id="toggle-zoom-lock" /><span class="toggle-knob"></span></label>
+        <label class="toggle-row"><span>Grade</span><input type="checkbox" id="toggle-grid-mob" /><span class="toggle-knob"></span></label>
         <div class="menu-field">
           <label>Sensibilidade pan</label>
-          <input type="range" id="pan-sensitivity" min="0.3" max="2" step="0.1" value="1" />
+          <input type="range" id="pan-sensitivity" min="0.3" max="3" step="0.1" value="1" />
         </div>
       </div>
-
       <div class="menu-group">
-        <div class="menu-group-title">Fundo</div>
+        <div class="menu-group-title">Fundo do canvas</div>
         <select id="bg-select" class="menu-select">
           <option value="pdf">PDF (miniatura)</option>
           <option value="dark">Escuro</option>
           <option value="light">Claro</option>
           <option value="amoled">AMOLED (preto)</option>
+          <option value="checkerboard">Xadrez (transparência)</option>
         </select>
       </div>
-
       <div class="menu-group">
         <div class="menu-group-title">Tema</div>
         <div class="theme-grid-mob">
@@ -196,7 +165,6 @@
           <button data-theme-btn="amoled" class="theme-option-mob">AMOLED</button>
         </div>
       </div>
-
       <button id="btn-mob-disconnect" class="btn-danger full mt16">Desconectar</button>
     </div>
   </div>

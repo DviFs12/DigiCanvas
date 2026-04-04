@@ -90,3 +90,20 @@
 .theme-option-mob{padding:8px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);cursor:pointer;font-size:11px;font-family:var(--font-sans);color:var(--text-dim);transition:var(--trans)}
 .theme-option-mob:hover{border-color:var(--border2)}
 .theme-option-mob.active{border-color:var(--accent);color:var(--accent)}
+
+/* ── SLIDER DE ESPESSURA (#4) ── */
+.size-slider-mob{display:flex;align-items:center;gap:6px;flex-shrink:0}
+.size-preview-wrap{width:24px;height:24px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.size-preview-dot{border-radius:50%;background:currentColor;width:4px;height:4px;transition:width .15s,height .15s;color:var(--text)}
+#size-slider{width:80px;accent-color:var(--accent);height:4px;flex-shrink:0}
+.size-slider-num{font-family:var(--font-mono);font-size:11px;color:var(--text-dim);width:24px;text-align:right;flex-shrink:0}
+
+/* ── BOTÃO RESIZE (#3) ── */
+/* Reutiliza .mob-tool com icone especial */
+
+/* ── FUNDO XADREZ (#5) é desenhado em bgCanvas via JS ── */
+
+/* ── Canvases sobrepostos ── */
+#bg-canvas,#thumb-canvas,#remote-canvas-mob,#grid-canvas-mob,#mobile-canvas{
+  position:absolute; left:0;
+}

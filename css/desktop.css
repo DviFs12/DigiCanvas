@@ -103,3 +103,39 @@ input[type=color]{width:28px;height:28px;border:none;border-radius:6px;cursor:po
 .sk-row{display:flex;align-items:center;gap:8px;padding:5px 0;font-size:12px;color:var(--text-dim)}
 .sk-row span{margin-left:auto}
 kbd{font-family:var(--font-mono);font-size:10px;padding:2px 6px;background:var(--surface2);border:1px solid var(--border2);border-radius:4px;color:var(--text);white-space:nowrap}
+
+/* ── MODOS DE INTERAÇÃO (#2) ── */
+.mode-group{display:flex;gap:2px;background:var(--bg);border-radius:7px;padding:2px;border:1px solid var(--border)}
+.mode-btn{width:28px!important;height:28px!important;border-radius:5px!important;font-size:14px!important;cursor:pointer;border:none;background:transparent;transition:var(--trans)}
+.mode-btn:hover{background:var(--surface)}
+.mode-btn.active{background:var(--accent)!important;box-shadow:0 0 8px var(--accent-glow)}
+.mode-label{font-size:10px;color:var(--text-muted);min-width:54px}
+
+/* ── SLIDER ESPESSURA (#4) ── */
+.size-slider-wrap{display:flex;align-items:center;gap:6px;padding:2px 4px}
+.size-slider-wrap input[type=range]{width:70px;accent-color:var(--accent);height:4px}
+
+/* ── SPLIT BUTTONS (#8 #9) ── */
+.split-btn{position:relative;display:flex;gap:0}
+.split-main{width:28px!important;height:28px!important;border-radius:5px 0 0 5px!important;border-right:1px solid rgba(255,255,255,0.1)!important}
+.split-arrow{width:14px!important;height:28px!important;border-radius:0 5px 5px 0!important;font-size:9px!important;padding:0!important;display:flex!important;align-items:center!important;justify-content:center!important}
+.split-dropdown{position:absolute;top:calc(100% + 4px);right:0;min-width:180px;background:var(--surface2);border:1px solid var(--border2);border-radius:var(--radius);box-shadow:var(--shadow-md);z-index:100;display:none;flex-direction:column;overflow:hidden}
+.split-dropdown.open{display:flex}
+.split-dropdown button{padding:9px 14px;background:transparent;border:none;color:var(--text-dim);font-size:12px;font-family:var(--font-sans);text-align:left;cursor:pointer;transition:var(--trans)}
+.split-dropdown button:hover{background:var(--bg3);color:var(--text)}
+
+/* ── QR FALLBACK / LINK (#7) ── */
+.qr-copy-row{margin-top:6px}
+.qr-link-text{font-size:9px;color:var(--text-muted);word-break:break-all;display:block;text-align:center}
+.qr-fallback{text-align:center;font-size:11px;color:var(--text-dim);padding:4px}
+
+/* ── VIEWPORT INDICATOR CURSORS ── */
+#viewport-indicator[style*="cursor:grab"]:active{cursor:grabbing!important}
+
+/* ── FIELD ROW ── */
+.field-row{margin:8px 0}
+.field-label{display:block;font-size:11px;color:var(--text-muted);margin-bottom:4px}
+.field-select{width:100%;padding:7px 10px;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--radius);color:var(--text);font-family:var(--font-sans);font-size:12px;cursor:pointer;outline:none}
+
+/* ── HINT INLINE ── */
+.hint-inline{font-size:9px;opacity:.6}

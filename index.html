@@ -11,24 +11,14 @@
 </head>
 <body class="desktop-mode">
 
-<!-- ═══════════════════════════════ TELA DE BOAS-VINDAS ══════════════════════ -->
+<!-- ══════════ BOAS-VINDAS ══════════ -->
 <div id="screen-welcome" class="screen active">
-  <div class="welcome-bg">
-    <div class="grid-lines"></div>
-    <div class="glow-orb orb-1"></div>
-    <div class="glow-orb orb-2"></div>
-  </div>
-
+  <div class="welcome-bg"><div class="grid-lines"></div><div class="glow-orb orb-1"></div><div class="glow-orb orb-2"></div></div>
   <div class="welcome-layout">
-
-    <!-- Coluna esquerda: hero -->
     <div class="welcome-hero">
-      <div class="logo-mark">
-        <svg viewBox="0 0 60 60" fill="none"><rect x="4" y="4" width="52" height="52" rx="8" stroke="var(--accent)" stroke-width="2"/><path d="M16 44 L28 20 L34 32 L40 24 L46 44" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="46" cy="16" r="5" fill="var(--accent2)" opacity="0.8"/></svg>
-      </div>
+      <div class="logo-mark"><svg viewBox="0 0 60 60" fill="none"><rect x="4" y="4" width="52" height="52" rx="8" stroke="var(--accent)" stroke-width="2"/><path d="M16 44 L28 20 L34 32 L40 24 L46 44" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="46" cy="16" r="5" fill="var(--accent2)" opacity="0.8"/></svg></div>
       <h1>DigiCanvas</h1>
       <p class="subtitle">Mesa digitalizadora remota no navegador</p>
-
       <div class="welcome-actions">
         <label class="btn-primary" id="btn-open-pdf">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
@@ -40,58 +30,50 @@
           Modo Demo
         </button>
       </div>
-
-      <div class="welcome-note">🔒 Tudo processa localmente — nenhum arquivo sai do navegador</div>
-
-      <!-- Temas na welcome -->
+      <div class="welcome-note">🔒 Processado 100% localmente — nenhum arquivo sai do navegador</div>
       <div class="theme-switcher">
-        <button data-theme-btn="dark"  class="theme-dot active" title="Escuro"></button>
-        <button data-theme-btn="light" class="theme-dot" title="Claro"></button>
+        <button data-theme-btn="dark"   class="theme-dot active" title="Escuro"></button>
+        <button data-theme-btn="light"  class="theme-dot" title="Claro"></button>
         <button data-theme-btn="amoled" class="theme-dot" title="AMOLED"></button>
       </div>
     </div>
-
-    <!-- Coluna direita: recentes -->
     <div class="welcome-recents">
       <div class="recents-header">
         <h3>Recentes</h3>
-        <button class="btn-ghost small" id="btn-clear-recents" title="Limpar recentes">Limpar</button>
+        <button class="btn-ghost small" id="btn-clear-recents">Limpar</button>
       </div>
-      <div id="recents-list" class="recents-list">
-        <p class="recents-empty">Nenhum arquivo recente</p>
-      </div>
+      <div id="recents-list" class="recents-list"><p class="recents-empty">Nenhum arquivo recente</p></div>
     </div>
-
   </div>
 </div>
 
-<!-- ═══════════════════════════════ TELA PRINCIPAL ══════════════════════════ -->
+<!-- ══════════ TELA PRINCIPAL ══════════ -->
 <div id="screen-main" class="screen">
 
-  <!-- ── TOOLBAR SUPERIOR ── -->
+  <!-- TOOLBAR SUPERIOR -->
   <div id="pdf-toolbar">
-
     <div class="toolbar-left">
-      <!-- Navegação PDF -->
       <button id="btn-prev-page" title="Anterior (←)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg></button>
       <span id="page-info" class="toolbar-label">— / —</span>
       <button id="btn-next-page" title="Próxima (→)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></button>
       <div class="sep"></div>
-      <!-- Zoom -->
-      <button id="btn-zoom-out" title="Zoom − (-)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg></button>
+      <button id="btn-zoom-out" title="−"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg></button>
       <span id="zoom-level" class="toolbar-label">100%</span>
-      <button id="btn-zoom-in"  title="Zoom + (+)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg></button>
-      <button id="btn-zoom-fit" title="Ajustar (F)">Fit</button>
+      <button id="btn-zoom-in"  title="+"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg></button>
+      <button id="btn-zoom-fit" title="Fit (F)">Fit</button>
     </div>
-
-    <!-- Filename no centro -->
-    <div class="toolbar-center">
-      <span id="pdf-filename" class="filename-tag"></span>
-    </div>
-
+    <div class="toolbar-center"><span id="pdf-filename" class="filename-tag"></span></div>
     <div class="toolbar-right">
+      <!-- Modos de interação (#2) -->
+      <div class="mode-group" title="Modo de interação">
+        <button class="mode-btn active" data-pc-mode="draw" title="Desenhar (D)">✏️</button>
+        <button class="mode-btn"        data-pc-mode="move" title="Mover caixa (V)">✋</button>
+        <button class="mode-btn"        data-pc-mode="resize" title="Redimensionar caixa (R)">📐</button>
+      </div>
+      <span id="pc-mode-label" class="toolbar-label mode-label">Desenhar</span>
+      <div class="sep"></div>
       <!-- Ferramentas -->
-      <div class="tool-group" role="toolbar" aria-label="Ferramentas de desenho">
+      <div class="tool-group">
         <button class="tool-btn active" data-tool="pen"         title="Caneta (P)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/></svg></button>
         <button class="tool-btn"        data-tool="marker"      title="Marcador (M)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25z"/><path d="M20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg></button>
         <button class="tool-btn"        data-tool="highlighter" title="Marca-texto (H)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 3L5 21"/><path d="M15 3l4 18"/><path d="M3 9h18"/><path d="M3 15h18"/></svg></button>
@@ -101,57 +83,59 @@
       </div>
       <div class="sep"></div>
       <input type="color" id="stroke-color" value="#e63946" title="Cor" />
-      <div class="size-picker">
-        <button class="size-btn active" data-size="2"  title="Fino">S</button>
-        <button class="size-btn"        data-size="5"  title="Médio">M</button>
-        <button class="size-btn"        data-size="10" title="Grosso">L</button>
+      <!-- Slider espessura (#4) -->
+      <div class="size-slider-wrap" title="Espessura">
+        <input type="range" id="stroke-size-slider" min="1" max="60" value="3" />
+        <span id="stroke-size-label" class="toolbar-label">3</span>
       </div>
       <div class="sep"></div>
-      <button id="btn-undo"              title="Desfazer (Ctrl+Z)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg></button>
-      <button id="btn-redo"              title="Refazer (Ctrl+Shift+Z)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 14 20 9 15 4"/><path d="M4 20v-7a4 4 0 0 1 4-4h12"/></svg></button>
-      <button id="btn-clear-annotations" title="Limpar (Ctrl+Shift+R)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg></button>
-      <button id="btn-export"            title="Exportar (Ctrl+E)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
+      <button id="btn-undo"  title="Desfazer (Ctrl+Z)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg></button>
+      <button id="btn-redo"  title="Refazer (Ctrl+Shift+Z)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 14 20 9 15 4"/><path d="M4 20v-7a4 4 0 0 1 4-4h12"/></svg></button>
+      <!-- Split Limpar (#9) -->
+      <div class="split-btn">
+        <button id="btn-clear-all" class="split-main" title="Limpar tudo (Ctrl+Shift+R)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg></button>
+        <button class="split-arrow" title="Opções de limpeza">▾</button>
+        <div class="split-dropdown">
+          <button id="btn-clear-local">Limpar traços do PC</button>
+          <button id="btn-clear-remote">Limpar traços do celular</button>
+        </div>
+      </div>
+      <!-- Split Download (#8) -->
+      <div class="split-btn">
+        <button id="btn-export-all" class="split-main" title="Baixar tudo (Ctrl+E)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
+        <button class="split-arrow" title="Opções de download">▾</button>
+        <div class="split-dropdown">
+          <button id="btn-export-local">PDF + Traços do PC</button>
+          <button id="btn-export-remote">PDF + Traços do celular</button>
+        </div>
+      </div>
     </div>
   </div>
 
-  <!-- ── ÁREA PRINCIPAL ── -->
+  <!-- ÁREA PRINCIPAL -->
   <div id="main-area">
-
-    <!-- Canvas -->
     <div id="canvas-wrapper">
       <canvas id="pdf-canvas"></canvas>
       <canvas id="annotation-canvas"></canvas>
       <canvas id="remote-canvas"></canvas>
       <canvas id="grid-canvas"></canvas>
-      <div id="viewport-indicator" title="Arraste para mover o viewport do celular"></div>
+      <div id="viewport-indicator" title="Clique para mover/redimensionar"></div>
     </div>
 
-    <!-- ── PAINEL LATERAL ── -->
+    <!-- PAINEL LATERAL -->
     <aside id="side-panel">
-
-      <!-- Abas -->
       <div class="panel-tabs">
-        <button class="ptab active" data-tab="connect">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.69 3.38 2 2 0 0 1 3.66 1h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.63a16 16 0 0 0 6 6l1-1a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
-          <span>Conexão</span>
-        </button>
-        <button class="ptab" data-tab="settings">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-          <span>Config</span>
-        </button>
-        <button class="ptab" data-tab="shortcuts">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M8 12h.01M12 12h.01M16 12h.01M7 16h10"/></svg>
-          <span>Atalhos</span>
-        </button>
+        <button class="ptab active" data-tab="connect"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.69 3.38 2 2 0 0 1 3.66 1h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L7.91 8.63a16 16 0 0 0 6 6l1-1a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg><span>Conexão</span></button>
+        <button class="ptab" data-tab="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg><span>Config</span></button>
+        <button class="ptab" data-tab="shortcuts"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M8 12h.01M12 12h.01M16 12h.01M7 16h10"/></svg><span>Atalhos</span></button>
       </div>
 
-      <!-- Tab: Conexão -->
+      <!-- Tab Conexão -->
       <div class="panel-tab-content active" data-tab-content="connect">
         <div class="panel-row">
           <div id="status-dot" class="status-dot disconnected"></div>
           <span id="status-label" class="status-label">Desconectado</span>
         </div>
-
         <div id="conn-setup">
           <button id="btn-generate-code" class="btn-primary full mt8">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
@@ -162,14 +146,11 @@
             <div id="code-digits"></div>
             <span class="code-hint">Digite no celular ou aponte a câmera</span>
             <div id="code-qr"></div>
+            <div class="qr-copy-row"><span id="qr-link" class="qr-link-text"></span></div>
           </div>
         </div>
-
         <div id="conn-status" class="hidden">
-          <div class="connected-badge">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
-            Celular conectado
-          </div>
+          <div class="connected-badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>Celular conectado</div>
           <button id="btn-disconnect" class="btn-danger small full mt8">Desconectar</button>
         </div>
 
@@ -179,7 +160,7 @@
           <div class="info-row"><span>Y</span><span id="vp-y">—</span></div>
           <div class="info-row"><span>Zoom</span><span id="vp-zoom">—</span></div>
         </div>
-        <p class="hint-text">Arraste o retângulo azul no documento para mover o viewport do celular.</p>
+        <p class="hint-text">Use o modo ✋ ou 📐 na toolbar para mover/redimensionar a caixa.</p>
 
         <div class="section-title mt16">PDF</div>
         <label class="btn-secondary full" id="btn-change-pdf">
@@ -189,28 +170,27 @@
         </label>
       </div>
 
-      <!-- Tab: Configurações -->
+      <!-- Tab Config -->
       <div class="panel-tab-content" data-tab-content="settings">
-
         <div class="section-title">Exibição</div>
+        <label class="toggle-row"><span>Traços do celular</span><input type="checkbox" id="toggle-remote-strokes" checked /><span class="toggle-knob"></span></label>
+        <label class="toggle-row"><span>Grade</span><input type="checkbox" id="toggle-grid" /><span class="toggle-knob"></span></label>
         <label class="toggle-row">
-          <span>Traços do celular</span>
-          <input type="checkbox" id="toggle-remote-strokes" checked /><span class="toggle-knob"></span>
-        </label>
-        <label class="toggle-row">
-          <span>Grade sobre PDF</span>
-          <input type="checkbox" id="toggle-grid" /><span class="toggle-knob"></span>
-        </label>
-        <label class="toggle-row">
-          <span>Sincronizar posição</span>
-          <input type="checkbox" id="toggle-sync-scroll" checked /><span class="toggle-knob"></span>
+          <span>🔗 Acompanhar caixa <small class="hint-inline">(#6)</small></span>
+          <input type="checkbox" id="toggle-follow-vp" checked /><span class="toggle-knob"></span>
         </label>
 
         <div class="section-title mt16">Celular</div>
-        <label class="toggle-row">
-          <span>🔒 Travar zoom</span>
-          <input type="checkbox" id="toggle-zoom-lock-desktop" /><span class="toggle-knob"></span>
-        </label>
+        <label class="toggle-row"><span>🔒 Travar zoom</span><input type="checkbox" id="toggle-zoom-lock-desktop" /><span class="toggle-knob"></span></label>
+
+        <div class="section-title mt16">Limpeza (#9/#10)</div>
+        <div class="field-row">
+          <label class="field-label">Modo de limpeza</label>
+          <select id="select-clear-mode" class="field-select">
+            <option value="shared">Compartilhado (limpa tudo)</option>
+            <option value="separate">Separado (cada dispositivo)</option>
+          </select>
+        </div>
 
         <div class="section-title mt16">Tema</div>
         <div class="theme-grid">
@@ -220,7 +200,7 @@
         </div>
       </div>
 
-      <!-- Tab: Atalhos -->
+      <!-- Tab Atalhos -->
       <div class="panel-tab-content" data-tab-content="shortcuts">
         <div class="section-title">Ferramentas</div>
         <div class="shortcut-list">
@@ -229,29 +209,28 @@
           <div class="sk-row"><kbd>H</kbd><span>Marca-texto</span></div>
           <div class="sk-row"><kbd>E</kbd><span>Borracha</span></div>
           <div class="sk-row"><kbd>L</kbd><span>Linha</span></div>
-          <div class="sk-row"><kbd>R</kbd><span>Retângulo</span></div>
         </div>
         <div class="section-title mt16">Edição</div>
         <div class="shortcut-list">
           <div class="sk-row"><kbd>Ctrl+Z</kbd><span>Desfazer</span></div>
           <div class="sk-row"><kbd>Ctrl+Shift+Z</kbd><span>Refazer</span></div>
-          <div class="sk-row"><kbd>Ctrl+Shift+R</kbd><span>Limpar</span></div>
+          <div class="sk-row"><kbd>Ctrl+Shift+R</kbd><span>Limpar tudo</span></div>
           <div class="sk-row"><kbd>Ctrl+E</kbd><span>Exportar</span></div>
           <div class="sk-row"><kbd>Ctrl+O</kbd><span>Abrir PDF</span></div>
         </div>
         <div class="section-title mt16">Navegação</div>
         <div class="shortcut-list">
           <div class="sk-row"><kbd>← →</kbd><span>Páginas</span></div>
-          <div class="sk-row"><kbd>+ -</kbd><span>Zoom</span></div>
+          <div class="sk-row"><kbd>+ −</kbd><span>Zoom</span></div>
           <div class="sk-row"><kbd>F</kbd><span>Ajustar</span></div>
           <div class="sk-row"><kbd>G</kbd><span>Grade</span></div>
-          <div class="sk-row"><kbd>T</kbd><span>Alternar tema</span></div>
+          <div class="sk-row"><kbd>T</kbd><span>Tema</span></div>
+          <div class="sk-row"><kbd>Ctrl+Scroll</kbd><span>Zoom roda</span></div>
         </div>
       </div>
-
     </aside>
-  </div><!-- /main-area -->
-</div><!-- /screen-main -->
+  </div>
+</div>
 
 <script type="module" src="js/store.js"></script>
 <script type="module" src="js/shortcuts.js"></script>
@@ -263,7 +242,7 @@
 <script type="module" src="js/toast.js"></script>
 <script type="module" src="js/desktop.js"></script>
 <script>
-// Tabs do painel lateral
+// Tabs
 document.querySelectorAll('.ptab').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.ptab').forEach(b => b.classList.remove('active'));
@@ -272,9 +251,24 @@ document.querySelectorAll('.ptab').forEach(btn => {
     document.querySelector(`[data-tab-content="${btn.dataset.tab}"]`)?.classList.add('active');
   });
 });
-// Limpar recentes
-document.getElementById('btn-clear-recents')?.addEventListener('click', () => {
-  import('./js/store.js').then(m => { m.clearRecents(); location.reload(); });
+// Split buttons
+document.querySelectorAll('.split-btn').forEach(sb => {
+  sb.querySelector('.split-arrow')?.addEventListener('click', e => {
+    e.stopPropagation();
+    const dd = sb.querySelector('.split-dropdown');
+    const isOpen = dd.classList.contains('open');
+    document.querySelectorAll('.split-dropdown.open').forEach(d => d.classList.remove('open'));
+    if (!isOpen) dd.classList.add('open');
+  });
+});
+document.addEventListener('click', () => {
+  document.querySelectorAll('.split-dropdown.open').forEach(d => d.classList.remove('open'));
+});
+// Modo de interação via teclado
+document.addEventListener('keydown', e => {
+  if (['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName)) return;
+  if (e.key === 'd' || e.key === 'D') document.querySelector('[data-pc-mode="draw"]')?.click();
+  if (e.key === 'v' || e.key === 'V') document.querySelector('[data-pc-mode="move"]')?.click();
 });
 </script>
 </body>
