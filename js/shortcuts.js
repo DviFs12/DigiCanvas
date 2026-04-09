@@ -40,6 +40,7 @@ const MAP = {
   'f':            'zoom-fit',
   't':            'toggle-theme',
   'g':            'toggle-grid',
+  'k':            'toggle-follow',
 };
 
 document.addEventListener('keydown', e => {

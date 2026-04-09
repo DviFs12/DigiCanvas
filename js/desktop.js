@@ -60,16 +60,27 @@ on('btn-change-pdf',    'click',  () => $('file-input-change')?.click());
 
 async function openPDF(file) {
   showLoading('Carregando PDF…');
+  const isSwap = !!viewer?.pdfDoc; // trocar PDF com sessão ativa
   try {
     const buffer = await file.arrayBuffer();
     currentFile  = { name: file.name, size: file.size, buffer };
     showMain();
     if (!annotation) initCanvases();
+
+    // Troca de PDF: preserva conexão, avisa celular, limpa só anotações remotas
+    if (isSwap && peer?.state === ConnState.CONNECTED) {
+      peer.send({ type: 'pdf:swapping' }); // sinaliza que um novo PDF está vindo
+      annotation.clearRemote();            // limpa camada remota — os traços do celular eram do PDF antigo
+      // Os traços locais (PC) são mantidos — o usuário decide se quer limpar
+    }
+
     await viewer.loadFromBuffer(buffer);
     $('pdf-filename').textContent = file.name;
     const thumb = await viewer.getThumbnail(120);
     addRecent({ name: file.name, size: file.size, thumb });
     renderRecents();
+
+    if (isSwap) toast('PDF trocado — conexão mantida ✓', 'success', 2500);
   } catch (err) {
     toast('Erro ao abrir: ' + err.message, 'error');
   } finally { hideLoading(); }
@@ -136,8 +147,11 @@ function initCanvases() {
     $('page-info').textContent  = `${page} / ${total}`;
     $('zoom-level').textContent = Math.round(viewer.scale * 100) + '%';
     annotation.onCanvasResize();
+    annotation.setPage(page);
     drawGrid();
     broadcastPdfInfo();
+    // Avisa o celular qual página está visível — ele usa isso para indexar strokes
+    peer?.send({ type: 'pdf:page', page, total });
   };
 
   // Aplica modo inicial
@@ -221,9 +235,12 @@ function applyModeToUI(mode) {
   // Annotation recebe eventos SOMENTE no modo draw
   annotation?.setActive(mode === 'draw');
 
-  // Cursor no canvas de anotação
+  // Cursor no canvas de anotação + wrapper
   if (annotationCanvas) {
     annotationCanvas.style.cursor = mode === 'draw' ? 'crosshair' : 'default';
+  }
+  if (canvasWrapper) {
+    canvasWrapper.style.cursor = mode === 'draw' ? 'crosshair' : (mode === 'move' ? 'default' : 'default');
   }
   // Cursor no indicator
   if (viewportIndicator) {
@@ -378,6 +395,32 @@ on('toggle-remote-strokes', 'change', e => {
 on('toggle-follow-vp', 'change', e => {
   State.set('followViewport', e.target.checked);
   setPref('followViewport', e.target.checked);
+  syncFollowBtn(e.target.checked);
+});
+
+// ── Botão rápido de follow na toolbar ─────────────────────────────────────
+// Sincroniza o botão da toolbar com o estado interno
+function syncFollowBtn(following) {
+  const btn      = $('btn-follow-toggle');
+  const iconLock = $('follow-icon-lock');
+  const iconOpen = $('follow-icon-unlock');
+  if (!btn) return;
+  btn.classList.toggle('follow-active', following);
+  btn.setAttribute('aria-pressed', following);
+  if (iconLock) iconLock.style.display = following ? 'block' : 'none';
+  if (iconOpen) iconOpen.style.display = following ? 'none'  : 'block';
+}
+
+on('btn-follow-toggle', 'click', () => {
+  const current = State.get('followViewport') ?? true;
+  const next    = !current;
+  State.set('followViewport', next);
+  setPref('followViewport', next);
+  // Mantém checkbox do painel sincronizado
+  const chk = $('toggle-follow-vp');
+  if (chk) chk.checked = next;
+  syncFollowBtn(next);
+  toast(next ? '🔗 Acompanhando viewport' : '🔓 Viewport livre', 'info');
 });
 
 on('toggle-zoom-lock-desktop', 'change', e => {
@@ -422,6 +465,9 @@ function applyPrefsToUI() {
   document.querySelectorAll('[data-theme-btn]').forEach(b =>
     b.classList.toggle('active', b.dataset.themeBtn === getTheme())
   );
+
+  // Sincroniza botão de follow na toolbar
+  syncFollowBtn(p.followViewport ?? true);
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -650,8 +696,18 @@ function setStatusDot(s) {
 // ATALHOS
 // ══════════════════════════════════════════════════════════════════════════
 
-shortcuts.on('undo',    () => { if (annotation?.undo()) peer?.send({type:'undo'}); });
-shortcuts.on('redo',    () => { if (annotation?.redo()) peer?.send({type:'redo'}); });
+shortcuts.on('undo', () => {
+  if (annotation?.undo()) {
+    peer?.send({ type:'undo' });
+    toast('↩ Desfeito', 'info', 800);
+  }
+});
+shortcuts.on('redo', () => {
+  if (annotation?.redo()) {
+    peer?.send({ type:'redo' });
+    toast('↪ Refeito', 'info', 800);
+  }
+});
 shortcuts.on('clear',   () => { annotation?.clear(); peer?.send({type:'clear:all'}); });
 shortcuts.on('export',  () => doExport({includeLocal:true,includeRemote:true},'completo'));
 shortcuts.on('open',    () => $('file-input')?.click());
@@ -668,6 +724,7 @@ shortcuts.on('toggle-theme', () => {
   const next=themes[(themes.indexOf(getTheme())+1)%themes.length];
   setTheme(next); toast('Tema: '+next,'info');
 });
+shortcuts.on('toggle-follow', () => $('btn-follow-toggle')?.click());
 ['pen','marker','highlighter','eraser','line','rect'].forEach(t =>
   shortcuts.on(`tool:${t}`, () => document.querySelector(`.tool-btn[data-tool="${t}"]`)?.click())
 );

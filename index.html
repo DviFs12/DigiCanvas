@@ -106,6 +106,15 @@
       </div>
       <span id="pc-mode-label" class="toolbar-label mode-label">Desenhar</span>
 
+      <!-- Botão rápido: travar/destravar acompanhamento do viewport na toolbar -->
+      <button id="btn-follow-toggle" title="Travar/destravar acompanhamento do viewport (K)"
+              class="toolbar-icon-btn follow-active" aria-pressed="true">
+        <svg id="follow-icon-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             style="display:none"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        <svg id="follow-icon-unlock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>
+      </button>
+
       <div class="sep"></div>
 
       <!-- Ferramentas de desenho -->
@@ -136,7 +145,7 @@
 
       <!-- Slider de espessura -->
       <div class="size-slider-wrap">
-        <input type="range" id="stroke-size-slider" min="1" max="60" value="3" title="Espessura" />
+        <input type="range" id="stroke-size-slider" min="1" max="100" value="3" title="Espessura" />
         <span id="stroke-size-label" class="toolbar-label">3</span>
       </div>
 
@@ -318,6 +327,7 @@
           <div class="sk-row"><kbd>F</kbd><span>Ajustar</span></div>
           <div class="sk-row"><kbd>D</kbd><span>Modo Desenhar</span></div>
           <div class="sk-row"><kbd>V</kbd><span>Modo Mover</span></div>
+          <div class="sk-row"><kbd>K</kbd><span>Travar/destravar viewport</span></div>
           <div class="sk-row"><kbd>G</kbd><span>Grade</span></div>
           <div class="sk-row"><kbd>T</kbd><span>Tema</span></div>
         </div>

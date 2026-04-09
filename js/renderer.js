@@ -1,73 +1,57 @@
 /**
- * renderer.js — Render loop desacoplado (requestAnimationFrame)
- * ──────────────────────────────────────────────────────────────
- * Gerencia o rendering do celular em camadas lógicas separadas.
- * Cada camada é um canvas independente — eraser nunca toca o fundo.
+ * renderer.js — Render loop com rAF
  *
  * CAMADAS (z-index crescente):
- *   bgCanvas    — fundo sólido ou xadrez
- *   thumbCanvas — miniatura do PDF (scroll com viewport)
- *   remCanvas   — traços recebidos do PC (layerPC)
- *   gridCanvas  — grade de referência
- *   drawCanvas  — traços do celular (layerMobile) + cursor
+ *   bg    — fundo sólido / xadrez
+ *   thumb — miniatura do PDF (acompanha viewport)
+ *   rem   — traços do PC
+ *   grid  — grade
+ *   draw  — traços do celular (captura eventos)
  *
- * STROKE FORMAT (normalizado — viaja pela rede):
- *   { id, tool, color, size, points: [{nx,ny},...] }
- *   nx,ny ∈ [0,1] relativo ao doc PDF
+ * BUG CURVAS: usa quadraticCurveTo para suavizar linhas
+ * BUG CLAMP: ao redesenhar, usa clipping para não vazar fora do doc
  */
-
 import { Viewport } from './viewport.js';
 
 export class MobileRenderer {
-  /**
-   * @param {{ bg, thumb, rem, grid, draw }} canvases — elementos canvas
-   * @param {Viewport} vp — modelo de viewport
-   */
   constructor(canvases, vp) {
     this.canvases = canvases;
     this.vp = vp;
-
-    // Contextos
     this.ctx = {};
     for (const [k, c] of Object.entries(canvases)) {
       if (c) this.ctx[k] = c.getContext('2d');
     }
-
-    // Estado de render
-    this.bgMode      = 'pdf';   // 'pdf'|'dark'|'light'|'amoled'|'checkerboard'
+    this.bgMode      = 'pdf';
     this.gridEnabled = false;
-    this.pdfThumb    = null;    // HTMLImageElement
+    this.pdfThumb    = null;
+    this.layerPC     = [];
+    this.layerMobile = [];
+    this._activeStroke  = null;
+    this._remoteActive  = {};
+    this._dirty  = false;
+    this._rafId  = null;
+    this._dpr    = 1;
+    this._bound  = this._render.bind(this);
 
-    // Histórico de strokes vetoriais
-    this.layerPC     = [];  // strokes do PC, completos
-    this.layerMobile = [];  // strokes do celular, completos
-    this._activeStroke = null; // stroke local em andamento
-
-    // Strokes remotos (PC) em andamento — keyed by id
-    this._remoteActive = {};
-
-    // rAF
-    this._dirty = false;
-    this._rafId = null;
-    this._boundRender = this._render.bind(this);
-
-    // TOOLS config
     this.TOOLS = {
-      pen:         { opacity:1.0, widthMul:1,  blend:'source-over'    },
-      marker:      { opacity:1.0, widthMul:2,  blend:'source-over'    },
-      highlighter: { opacity:0.35,widthMul:6,  blend:'source-over'    },
-      eraser:      { opacity:1.0, widthMul:5,  blend:'destination-out'},
+      pen:         { opacity:1.0,  widthMul:1,   blend:'source-over'    },
+      marker:      { opacity:1.0,  widthMul:2.5, blend:'source-over'    },
+      highlighter: { opacity:0.35, widthMul:7,   blend:'source-over'    },
+      eraser:      { opacity:1.0,  widthMul:5,   blend:'destination-out'},
     };
   }
 
-  // ── Configuração ─────────────────────────────────────────────────────────
+  // ── Config ──────────────────────────────────────────────────────────────
+  setThumb(img)     { this.pdfThumb = img;   this.markDirty(); }
+  setBgMode(m)      { this.bgMode   = m;     this.markDirty(); }
+  setGridEnabled(v) { this.gridEnabled = v;  this.markDirty(); }
 
-  setThumb(img)        { this.pdfThumb = img;       this.markDirty(); }
-  setBgMode(mode)      { this.bgMode = mode;         this.markDirty(); }
-  setGridEnabled(v)    { this.gridEnabled = v;       this.markDirty(); }
-  markDirty()          { if (!this._dirty) { this._dirty = true; this._rafId = requestAnimationFrame(this._boundRender); } }
-
-  // ── Resize ────────────────────────────────────────────────────────────────
+  markDirty() {
+    if (!this._dirty) {
+      this._dirty = true;
+      this._rafId = requestAnimationFrame(this._bound);
+    }
+  }
 
   resize(w, h, dpr) {
     this._dpr = dpr;
@@ -78,128 +62,167 @@ export class MobileRenderer {
       c.style.width  = w + 'px';
       c.style.height = h + 'px';
     }
-    // Re-aplica transform DPR em todos os contextos
-    for (const ctx of Object.values(this.ctx)) {
-      if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    // Reconstrói contextos após resize (reset automático do canvas)
+    for (const [k, c] of Object.entries(this.canvases)) {
+      if (c) this.ctx[k] = c.getContext('2d');
     }
+    // NÃO aplicar setTransform aqui — usa scale no _render
     this.markDirty();
   }
 
-  // ── rAF loop ──────────────────────────────────────────────────────────────
-
+  // ── rAF ──────────────────────────────────────────────────────────────────
   _render() {
     this._dirty = false;
     this._rafId = null;
     const W = this.vp.scrW, H = this.vp.scrH;
-
     this._drawBg(W, H);
     this._drawThumb(W, H);
-    this._drawLayer(this.ctx.rem,  this.layerPC,     'rem');
+    this._drawLayer(this.ctx.rem,  this.layerPC,     'rem',  W, H);
     this._drawGrid(W, H);
-    this._drawLayer(this.ctx.draw, this.layerMobile, 'draw');
+    this._drawLayer(this.ctx.draw, this.layerMobile, 'draw', W, H);
   }
 
-  // ── Fundo ─────────────────────────────────────────────────────────────────
-
+  // ── Background ──────────────────────────────────────────────────────────
   _drawBg(W, H) {
     const c = this.ctx.bg; if (!c) return;
-    c.clearRect(0, 0, W, H);
+    c.clearRect(0, 0, W * this._dpr, H * this._dpr);
     if (this.bgMode === 'checkerboard') {
-      const sz = 14;
-      for (let y = 0; y < H; y += sz) for (let x = 0; x < W; x += sz) {
-        c.fillStyle = ((x/sz + y/sz) % 2 === 0) ? '#c8c8c8' : '#f8f8f8';
-        c.fillRect(x, y, sz, sz);
-      }
-    } else if (this.bgMode === 'light')  { c.fillStyle='#f8f8f5'; c.fillRect(0,0,W,H); }
-    else if (this.bgMode === 'amoled')   { c.fillStyle='#000';    c.fillRect(0,0,W,H); }
-    else { /* dark */ c.fillStyle='#1a1a2e'; c.fillRect(0,0,W,H); }
+      const sz = 14 * this._dpr;
+      for (let y = 0; y < H * this._dpr; y += sz)
+        for (let x = 0; x < W * this._dpr; x += sz) {
+          c.fillStyle = ((x/sz + y/sz) % 2 === 0) ? '#c0c0c0' : '#f0f0f0';
+          c.fillRect(x, y, sz, sz);
+        }
+    } else if (this.bgMode === 'light')  { c.fillStyle = '#f8f8f5'; c.fillRect(0,0,W*this._dpr,H*this._dpr); }
+    else if (this.bgMode === 'amoled')   { c.fillStyle = '#000';    c.fillRect(0,0,W*this._dpr,H*this._dpr); }
+    else                                  { c.fillStyle = '#1a1a2e'; c.fillRect(0,0,W*this._dpr,H*this._dpr); }
   }
 
-  // ── Miniatura do PDF ──────────────────────────────────────────────────────
-
+  // ── Thumb ────────────────────────────────────────────────────────────────
   _drawThumb(W, H) {
     const c = this.ctx.thumb; if (!c) return;
-    c.clearRect(0, 0, W, H);
+    const dpr = this._dpr;
+    c.clearRect(0, 0, W * dpr, H * dpr);
     if (this.bgMode !== 'pdf' || !this.pdfThumb) return;
     const vp = this.vp;
-    // Posição e tamanho do doc inteiro na tela
-    const dx = -vp.x * vp.z;
-    const dy = -vp.y * vp.z;
-    const dw =  vp.docW * vp.z;
-    const dh =  vp.docH * vp.z;
+    const dx = -vp.x * vp.z * dpr;
+    const dy = -vp.y * vp.z * dpr;
+    const dw =  vp.docW * vp.z * dpr;
+    const dh =  vp.docH * vp.z * dpr;
     c.drawImage(this.pdfThumb, dx, dy, dw, dh);
   }
 
-  // ── Grade ─────────────────────────────────────────────────────────────────
-
+  // ── Grid ─────────────────────────────────────────────────────────────────
   _drawGrid(W, H) {
     const c = this.ctx.grid; if (!c) return;
-    c.clearRect(0, 0, W, H);
+    const dpr = this._dpr;
+    c.clearRect(0, 0, W * dpr, H * dpr);
     if (!this.gridEnabled) return;
-    const step = 40 * this.vp.z;
-    const offX = (-this.vp.x * this.vp.z) % step;
-    const offY = (-this.vp.y * this.vp.z) % step;
+    const step = 40 * this.vp.z * dpr;
+    const offX = ((-this.vp.x * this.vp.z * dpr) % step + step) % step;
+    const offY = ((-this.vp.y * this.vp.z * dpr) % step + step) % step;
     c.strokeStyle = 'rgba(124,106,247,0.22)';
-    c.lineWidth   = 0.5;
-    for (let x = ((offX % step) + step) % step; x < W; x += step) { c.beginPath(); c.moveTo(x,0); c.lineTo(x,H); c.stroke(); }
-    for (let y = ((offY % step) + step) % step; y < H; y += step) { c.beginPath(); c.moveTo(0,y); c.lineTo(W,y); c.stroke(); }
+    c.lineWidth = 0.5 * dpr;
+    for (let x = offX; x < W * dpr; x += step) { c.beginPath(); c.moveTo(x,0); c.lineTo(x,H*dpr); c.stroke(); }
+    for (let y = offY; y < H * dpr; y += step) { c.beginPath(); c.moveTo(0,y); c.lineTo(W*dpr,y); c.stroke(); }
   }
 
-  // ── Desenho de uma camada ─────────────────────────────────────────────────
-
-  _drawLayer(ctx, strokes, layer) {
+  // ── Layer ────────────────────────────────────────────────────────────────
+  _drawLayer(ctx, strokes, layer, W, H) {
     if (!ctx) return;
-    ctx.clearRect(0, 0, this.vp.scrW, this.vp.scrH);
-    for (const s of strokes) this._drawStroke(ctx, s);
-    // Stroke em andamento
-    if (layer === 'draw' && this._activeStroke) this._drawStroke(ctx, this._activeStroke);
-    if (layer === 'rem') {
-      for (const s of Object.values(this._remoteActive)) this._drawStroke(ctx, s);
-    }
-  }
+    const dpr = this._dpr;
+    ctx.clearRect(0, 0, W * dpr, H * dpr);
 
-  _drawStroke(ctx, s) {
-    if (!s.points || s.points.length === 0) return;
-    const t = this.TOOLS[s.tool] ?? this.TOOLS.pen;
-    ctx.save();
-    ctx.lineCap              = 'round';
-    ctx.lineJoin             = 'round';
-    ctx.globalCompositeOperation = t.blend;
-    ctx.globalAlpha          = t.opacity;
-    ctx.strokeStyle          = s.tool === 'eraser' ? 'rgba(0,0,0,1)' : s.color;
-    ctx.fillStyle            = ctx.strokeStyle;
-    ctx.lineWidth            = s.size * t.widthMul;
-
+    // Clipping: limita o desenho à área do documento para evitar vazar
     const vp = this.vp;
+    const clipX = Math.max(0, -vp.x * vp.z * dpr);
+    const clipY = Math.max(0, -vp.y * vp.z * dpr);
+    const clipW = Math.min(W * dpr, vp.docW * vp.z * dpr - Math.max(0, vp.x * vp.z) * dpr);
+    const clipH = Math.min(H * dpr, vp.docH * vp.z * dpr - Math.max(0, vp.y * vp.z) * dpr);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(clipX, clipY, clipW, clipH);
+    ctx.clip();
 
-    if (s.points.length === 1) {
-      const sc = vp.normToScreen(s.points[0].nx, s.points[0].ny);
-      ctx.beginPath();
-      ctx.arc(sc.x, sc.y, Math.max(0.5, ctx.lineWidth / 2), 0, Math.PI * 2);
-      ctx.fill();
-    } else if (s.tool === 'line') {
-      const a = vp.normToScreen(s.points[0].nx, s.points[0].ny);
-      const b = vp.normToScreen(s.points[s.points.length-1].nx, s.points[s.points.length-1].ny);
-      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
-    } else if (s.tool === 'rect') {
-      const a = vp.normToScreen(s.points[0].nx, s.points[0].ny);
-      const b = vp.normToScreen(s.points[s.points.length-1].nx, s.points[s.points.length-1].ny);
-      ctx.strokeRect(a.x, a.y, b.x - a.x, b.y - a.y);
-    } else {
-      ctx.beginPath();
-      const p0 = vp.normToScreen(s.points[0].nx, s.points[0].ny);
-      ctx.moveTo(p0.x, p0.y);
-      for (let i = 1; i < s.points.length; i++) {
-        const p = vp.normToScreen(s.points[i].nx, s.points[i].ny);
-        ctx.lineTo(p.x, p.y);
-      }
-      ctx.stroke();
+    for (const s of strokes) this._stroke(ctx, s);
+    if (layer === 'draw' && this._activeStroke) this._stroke(ctx, this._activeStroke);
+    if (layer === 'rem') {
+      for (const s of Object.values(this._remoteActive)) this._stroke(ctx, s);
     }
     ctx.restore();
   }
 
-  // ── API de strokes locais (celular) ───────────────────────────────────────
+  // ── Desenho de um stroke ─────────────────────────────────────────────────
+  _stroke(ctx, s) {
+    if (!s?.points?.length) return;
+    const dpr = this._dpr;
+    const t   = this.TOOLS[s.tool] ?? this.TOOLS.pen;
+    const vp  = this.vp;
 
+    ctx.save();
+    ctx.lineCap  = 'round';
+    ctx.lineJoin = 'round';
+    ctx.globalCompositeOperation = t.blend;
+    ctx.globalAlpha = t.opacity;
+    ctx.strokeStyle = s.tool === 'eraser' ? 'rgba(0,0,0,1)' : s.color;
+    ctx.fillStyle   = ctx.strokeStyle;
+    // Espessura em px de tela, independente do zoom do PDF no desktop
+    ctx.lineWidth   = s.size * t.widthMul * dpr;
+
+    const pts = s.points;
+
+    if (pts.length === 1) {
+      const sc = vp.normToScreen(pts[0].nx, pts[0].ny);
+      ctx.beginPath();
+      ctx.arc(sc.x * dpr, sc.y * dpr, Math.max(0.5, ctx.lineWidth / 2), 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore(); return;
+    }
+
+    if (s.tool === 'line') {
+      const a = vp.normToScreen(pts[0].nx, pts[0].ny);
+      const b = vp.normToScreen(pts[pts.length-1].nx, pts[pts.length-1].ny);
+      ctx.beginPath();
+      ctx.moveTo(a.x * dpr, a.y * dpr);
+      ctx.lineTo(b.x * dpr, b.y * dpr);
+      ctx.stroke();
+      ctx.restore(); return;
+    }
+
+    if (s.tool === 'rect') {
+      const a = vp.normToScreen(pts[0].nx, pts[0].ny);
+      const b = vp.normToScreen(pts[pts.length-1].nx, pts[pts.length-1].ny);
+      ctx.strokeRect(a.x*dpr, a.y*dpr, (b.x-a.x)*dpr, (b.y-a.y)*dpr);
+      ctx.restore(); return;
+    }
+
+    // pen / marker / highlighter / eraser
+    // FIX CURVAS: usa quadraticCurveTo com ponto médio para suavizar
+    ctx.beginPath();
+    const p0 = vp.normToScreen(pts[0].nx, pts[0].ny);
+    ctx.moveTo(p0.x * dpr, p0.y * dpr);
+
+    if (pts.length === 2) {
+      const p1 = vp.normToScreen(pts[1].nx, pts[1].ny);
+      ctx.lineTo(p1.x * dpr, p1.y * dpr);
+    } else {
+      for (let i = 1; i < pts.length - 1; i++) {
+        const cur  = vp.normToScreen(pts[i].nx,   pts[i].ny);
+        const next = vp.normToScreen(pts[i+1].nx, pts[i+1].ny);
+        // Ponto médio entre cur e next = ponto de controle do arco
+        const midX = (cur.x + next.x) / 2 * dpr;
+        const midY = (cur.y + next.y) / 2 * dpr;
+        ctx.quadraticCurveTo(cur.x * dpr, cur.y * dpr, midX, midY);
+      }
+      // Fecha no último ponto
+      const last = vp.normToScreen(pts[pts.length-1].nx, pts[pts.length-1].ny);
+      ctx.lineTo(last.x * dpr, last.y * dpr);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // ── API Strokes Locais ───────────────────────────────────────────────────
   startStroke(tool, color, size, scrX, scrY) {
     const { nx, ny } = this.vp.screenToNorm(scrX, scrY);
     this._activeStroke = { tool, color, size, points: [{ nx, ny }] };
@@ -210,15 +233,24 @@ export class MobileRenderer {
   continueStroke(scrX, scrY) {
     if (!this._activeStroke) return null;
     const { nx, ny } = this.vp.screenToNorm(scrX, scrY);
-    this._activeStroke.points.push({ nx, ny });
+    // Evita pontos duplicados muito próximos (reduz quadratura)
+    const pts = this._activeStroke.points;
+    const last = pts[pts.length - 1];
+    // Distância mínima em espaço normalizado: ~0.5px na resolução do doc
+    const minDist = 0.5 / Math.max(this.vp.docW, this.vp.docH);
+    const dist = Math.hypot(nx - last.nx, ny - last.ny);
+    if (dist < minDist) return { nx: last.nx, ny: last.ny }; // descarta ponto duplicado
+    pts.push({ nx, ny });
     this.markDirty();
     return { nx, ny };
   }
 
   commitStroke() {
     if (!this._activeStroke) return;
-    this.layerMobile.push(this._activeStroke);
-    if (this.layerMobile.length > 200) this.layerMobile.shift();
+    if (this._activeStroke.points.length > 0) {
+      this.layerMobile.push(this._activeStroke);
+      if (this.layerMobile.length > 300) this.layerMobile.shift();
+    }
     this._activeStroke = null;
     this.markDirty();
   }
@@ -241,8 +273,7 @@ export class MobileRenderer {
     this.markDirty();
   }
 
-  // ── API de strokes remotos (PC) ───────────────────────────────────────────
-
+  // ── API Strokes Remotos ──────────────────────────────────────────────────
   remoteStart(id, tool, color, size, nx, ny) {
     this._remoteActive[id] = { tool, color, size, points: [{ nx, ny }] };
     this.markDirty();
@@ -257,7 +288,7 @@ export class MobileRenderer {
   remoteEnd(id) {
     const s = this._remoteActive[id]; if (!s) return;
     this.layerPC.push(s);
-    if (this.layerPC.length > 200) this.layerPC.shift();
+    if (this.layerPC.length > 300) this.layerPC.shift();
     delete this._remoteActive[id];
     this.markDirty();
   }
@@ -270,18 +301,15 @@ export class MobileRenderer {
   }
 
   clearPC() {
-    this.layerPC = {};
+    this.layerPC = [];
     this._remoteActive = {};
     this.markDirty();
   }
 
   clearAll() {
     this.clearMobile();
-    this.layerPC = [];
-    this._remoteActive = {};
-    this.markDirty();
+    this.clearPC();
   }
 
-  // Rebake (ex: ao mudar viewport — relayout automático pelo rAF)
   rebake() { this.markDirty(); }
 }

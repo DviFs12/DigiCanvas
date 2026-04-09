@@ -67,6 +67,9 @@ let pinchLastDist = 0, pinchLastMidX = 0, pinchLastMidY = 0;
 // Broadcast timer
 let _vpTimer = null;
 
+// Página atual do PDF no desktop — usada para indexar strokes por página
+let currentPdfPage = 1;
+
 // ══════════════════════════════════════════════════════════════════════════
 // INIT
 // ══════════════════════════════════════════════════════════════════════════
@@ -271,7 +274,8 @@ function beginStroke(x, y) {
   currentStrokeId = `m${strokeId}`;
   const { nx, ny } = ren.startStroke(currentTool, currentColor, currentSize, x, y);
   peer?.send({ type: 'stroke:start', id: currentStrokeId,
-    tool: currentTool, color: currentColor, size: currentSize, nx, ny });
+    tool: currentTool, color: currentColor, size: currentSize,
+    nx, ny, page: currentPdfPage });
   if (getPrefs().haptic && navigator.vibrate) navigator.vibrate(8);
 }
 
@@ -443,7 +447,8 @@ function onMsg(msg) {
     // PDF
     case 'pdf:size':
       State.set('pdfSize', { w: msg.w, h: msg.h });
-      vp.setDocSize(msg.w, msg.h);
+      vp.setDocSize(msg.w, msg.h); // faz fit automático internamente
+      ren.resize(canvasW, canvasH, window.devicePixelRatio || 1); // reconstrói contextos
       ren.rebake();
       break;
     case 'pdf:thumb': {
@@ -452,6 +457,19 @@ function onMsg(msg) {
       img.src = msg.data;
       break;
     }
+    // PC está trocando de PDF durante sessão ativa
+    case 'pdf:swapping':
+      ren.clearPC();
+      toast('📄 Novo PDF chegando…', 'info', 1500);
+      break;
+    // Página atual do PDF no desktop
+    case 'pdf:page':
+      currentPdfPage = msg.page ?? 1;
+      // Mostra brevemente qual página o PC está vendo no HUD
+      setText('mobile-mode-label', `Pág. ${msg.page}${msg.total ? '/' + msg.total : ''}`);
+      setTimeout(() => setText('mobile-mode-label',
+        mode === 'pan' ? 'Navegar' : 'Desenho'), 2000);
+      break;
 
     // Sync de estado
     case 'state:sync':
@@ -496,6 +514,8 @@ function showDrawScreen() {
   bindInput();
   startViewportBroadcast();
   applyMenuPrefs();
+  // Dica de uso na primeira vez
+  setTimeout(() => toast('1 dedo = desenha | 2 dedos = move/zoom', 'info', 3000), 800);
 }
 
 function applyMenuPrefs() {
@@ -566,11 +586,21 @@ $('size-slider')?.addEventListener('input', e => {
 
 // Undo / Clear
 $('btn-mob-undo')?.addEventListener('click', () => {
-  if (ren.undoMobile()) peer?.send({ type: 'undo' });
+  if (ren.undoMobile()) {
+    peer?.send({ type: 'undo' });
+    if (navigator.vibrate) navigator.vibrate([10, 30, 10]);
+    toast('↩ Desfeito', 'info', 800);
+  } else {
+    toast('Nada para desfazer', 'info', 800);
+  }
 });
 $('btn-mob-clear')?.addEventListener('click', () => {
-  ren.clearMobile();
-  peer?.send({ type: 'clear:local' });
+  if (!ren.layerMobile.length) { toast('Nada para limpar', 'info', 800); return; }
+  if (confirm('Limpar seus traços?')) {
+    ren.clearMobile();
+    peer?.send({ type: 'clear:local' });
+    toast('Traços limpos', 'info', 800);
+  }
 });
 
 // Desconectar

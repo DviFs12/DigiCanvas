@@ -32,8 +32,8 @@
 #screen-main{flex-direction:column;background:var(--bg2)}
 
 /* ── TOOLBAR ── */
-#pdf-toolbar{display:flex;align-items:center;gap:4px;padding:0 10px;height:50px;background:var(--bg3);border-bottom:1px solid var(--border);flex-shrink:0;overflow-x:auto}
-#pdf-toolbar::-webkit-scrollbar{height:0}
+#pdf-toolbar{display:flex;align-items:center;gap:4px;padding:0 10px;height:50px;background:var(--bg3);border-bottom:1px solid var(--border);flex-shrink:0;overflow:visible;position:relative;z-index:100}
+/* toolbar sem scroll - overflow visible */
 .toolbar-left,.toolbar-right{display:flex;align-items:center;gap:3px;flex-shrink:0}
 .toolbar-center{flex:1;display:flex;justify-content:center;min-width:0}
 #pdf-toolbar button{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border:none;border-radius:6px;background:transparent;color:var(--text-dim);cursor:pointer;font-size:11px;font-family:var(--font-mono);transition:var(--trans);flex-shrink:0}
@@ -146,10 +146,11 @@ kbd{font-family:var(--font-mono);font-size:10px;padding:2px 6px;background:var(-
    ══════════════════════════════════════════════════════ */
 
 .toolbar-dropdown-wrap {
-  position: relative;      /* âncora do dropdown */
+  position: relative;
   display:  inline-flex;
   align-items: center;
   gap: 0;
+  z-index: 100;
 }
 
 /* Seta que abre o menu */
@@ -170,18 +171,17 @@ kbd{font-family:var(--font-mono);font-size:10px;padding:2px 6px;background:var(-
 
 /* Dropdown — position:absolute relativo ao wrap, não ao body */
 .toolbar-dropdown {
-  display:    none;          /* oculto por padrão */
-  position:   absolute;
-  top:        calc(100% + 4px);   /* logo abaixo da toolbar */
-  right:      0;
-  z-index:    200;
-  min-width:  180px;
-  background: var(--surface2);
-  border:     1px solid var(--border2);
+  display:       none;
+  position:      absolute;
+  top:           calc(100% + 2px);
+  right:         0;
+  z-index:       9999;   /* garante sobre tudo */
+  min-width:     180px;
+  background:    var(--surface2);
+  border:        1px solid var(--border2);
   border-radius: var(--radius);
-  box-shadow: 0 8px 24px rgba(0,0,0,0.5);
-  overflow:   hidden;
-  /* NÃO afeta o fluxo da toolbar — é absoluto */
+  box-shadow:    0 8px 32px rgba(0,0,0,0.7);
+  overflow:      visible;
 }
 
 .toolbar-dropdown.open {
@@ -231,3 +231,24 @@ kbd{font-family:var(--font-mono);font-size:10px;padding:2px 6px;background:var(-
 .size-slider-wrap input[type=range] {
   width: 70px; accent-color: var(--accent); height: 4px;
 }
+
+/* ── BOTÃO FOLLOW-VIEWPORT NA TOOLBAR ── */
+.toolbar-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: var(--trans);
+  flex-shrink: 0;
+}
+.toolbar-icon-btn svg { width: 15px; height: 15px; pointer-events: none; }
+.toolbar-icon-btn:hover { background: var(--surface); color: var(--text); }
+.toolbar-icon-btn:active { transform: scale(.92); }
+.toolbar-icon-btn.follow-active { color: var(--accent3); }
+.toolbar-icon-btn.follow-active:hover { background: rgba(76,201,240,0.12); }
