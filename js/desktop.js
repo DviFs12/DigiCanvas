@@ -1,730 +1,596 @@
 /**
- * desktop.js v6 — REFATORADO
- * ────────────────────────────
- * Usa State manager para modo de interação e viewport.
- * Máquina de estados para modos: draw | move | resize
+ * desktop.js — Controller principal do PC
  *
  * RESPONSABILIDADES:
- *  - PDFViewer (zoom, páginas)
- *  - AnnotationEngine (draw no desktop)
- *  - Controle do viewport indicator (move/resize)
- *  - WebRTC (host)
- *  - UI (toolbar, painel, temas, recentes)
+ *  - Abrir/trocar PDF (PDF.js)
+ *  - Anotar sobre o PDF (coordenadas normalizadas)
+ *  - WebRTC como host
+ *  - Sincronizar com celular: thumb, size, page, strokes
+ *  - UI: toolbar, painel, recentes, temas, atalhos
+ *
+ * PROTOCOLO DE MENSAGENS (DataChannel):
+ *   PC → Celular:
+ *     pdf:size    { w, h }
+ *     pdf:thumb   { data: jpegDataURL }
+ *     pdf:page    { page, total }
+ *     stroke:start/move/end  { id, tool, color, size, nx, ny }
+ *     clear:all / clear:local / clear:remote
+ *     undo / redo
+ *     state:sync  { zoomLocked, gridEnabled }
+ *     viewport:set { nx, ny }
+ *
+ *   Celular → PC:
+ *     stroke:start/move/end  { id, tool, color, size, nx, ny, page }
+ *     clear:all / clear:local / clear:remote
+ *     undo
+ *     viewport  { nx, ny, nw, nh, zoom }
+ *     state:sync { zoomLocked }
+ *     request:pdf
  */
 
-import { generateCode }        from './signaling.js';
-import { DigiPeer, ConnState } from './webrtc.js';
-import { PDFViewer }           from './pdf-viewer.js';
-import { AnnotationEngine }    from './annotation.js';
-import { toast, showLoading, hideLoading } from './toast.js';
-import { shortcuts }           from './shortcuts.js';
-import { State }               from './state.js';
-import { getTheme, setTheme, applyTheme, getPrefs, setPref,
-         getRecents, addRecent, removeRecent, clearRecents } from './store.js';
+import { generateCode }    from './signaling.js';
+import { Peer, CS }        from './webrtc.js';
+import { PDFViewer }       from './pdfviewer.js';
+import { Annotation }      from './annotation.js';
+import {
+  getTheme, setTheme, applyTheme, cycleTheme,
+  getPrefs, setPref,
+  getRecents, addRecent, removeRecent, clearRecents,
+  toast, showLoading, hideLoading,
+} from './utils.js';
 
-// ── DOM ────────────────────────────────────────────────────────────────────
+// ── DOM helpers ──────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
 const on = (id, ev, fn) => $(id)?.addEventListener(ev, fn);
+const qsa = sel => document.querySelectorAll(sel);
 
-const canvasWrapper     = $('canvas-wrapper');
-const pdfCanvas         = $('pdf-canvas');
-const annotationCanvas  = $('annotation-canvas');
-const remoteCanvas      = $('remote-canvas');
-const gridCanvas        = $('grid-canvas');
-const viewportIndicator = $('viewport-indicator');
+// ── Canvas elements ───────────────────────────────────────────────────────────
+const cWrapper = $('canvas-wrapper');
+const cPDF     = $('pdf-canvas');
+const cAnnot   = $('annotation-canvas');
+const cRemote  = $('remote-canvas');
+const cGrid    = $('grid-canvas');
+const cVP      = $('vp-indicator');
 
-// ── Core ────────────────────────────────────────────────────────────────────
-let viewer      = null;
-let annotation  = null;
-let peer        = null;
-let sessionCode = null;
-let strokeId    = 0;
-let currentFile = null;
+// ── Core state ────────────────────────────────────────────────────────────────
+let viewer   = null;
+let annot    = null;
+let peer     = null;
+let code     = null;
+let strokeId = 0;
 
-// ── Init ────────────────────────────────────────────────────────────────────
+// Viewport do celular (normalizado)
+let vpState   = { nx:0, ny:0, nw:1, nh:1, zoom:1 };
+let followVP  = true;   // PC acompanha o viewport do celular
+let pcMode    = 'draw'; // 'draw' | 'move'
+
+// ── Init ──────────────────────────────────────────────────────────────────────
 applyTheme();
 renderRecents();
-applyPrefsToUI();
+restorePrefs();
 
-// ── Escuta mudanças de modo para ajustar cursores e handlers ────────────────
-State.on('pcMode', applyModeToUI);
-
-// ══════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════════
 // ABERTURA DE PDF
-// ══════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════════
 
-on('file-input',        'change', async e => { const f=e.target.files[0]; if (f) await openPDF(f); });
-on('btn-demo',          'click',  openDemo);
-on('file-input-change', 'change', async e => { const f=e.target.files[0]; if (f) await openPDF(f); });
-on('btn-change-pdf',    'click',  () => $('file-input-change')?.click());
+on('file-input',        'change', e => openPDF(e.target.files[0]));
+on('file-input-change', 'change', e => openPDF(e.target.files[0]));
 
 async function openPDF(file) {
+  if (!file) return;
+  const isSwap = !!viewer?.doc;
   showLoading('Carregando PDF…');
-  const isSwap = !!viewer?.pdfDoc; // trocar PDF com sessão ativa
   try {
-    const buffer = await file.arrayBuffer();
-    currentFile  = { name: file.name, size: file.size, buffer };
+    const buf = await file.arrayBuffer();
+    $('pdf-filename').textContent = file.name;
     showMain();
-    if (!annotation) initCanvases();
+    initCanvas();
 
-    // Troca de PDF: preserva conexão, avisa celular, limpa só anotações remotas
-    if (isSwap && peer?.state === ConnState.CONNECTED) {
-      peer.send({ type: 'pdf:swapping' }); // sinaliza que um novo PDF está vindo
-      annotation.clearRemote();            // limpa camada remota — os traços do celular eram do PDF antigo
-      // Os traços locais (PC) são mantidos — o usuário decide se quer limpar
+    // Troca de PDF com sessão ativa: mantém conexão, limpa traços remotos
+    if (isSwap && peer?.state === CS.CONNECTED) {
+      peer.send({ type: 'pdf:swapping' });
+      annot.clearRemote();
+      toast('PDF trocado — conexão mantida ✓', 'success', 2500);
     }
 
-    await viewer.loadFromBuffer(buffer);
-    $('pdf-filename').textContent = file.name;
-    const thumb = await viewer.getThumbnail(120);
+    await viewer.load(buf);
+    const thumb = await viewer.thumbnail(120);
     addRecent({ name: file.name, size: file.size, thumb });
     renderRecents();
-
-    if (isSwap) toast('PDF trocado — conexão mantida ✓', 'success', 2500);
-  } catch (err) {
-    toast('Erro ao abrir: ' + err.message, 'error');
-  } finally { hideLoading(); }
+  } catch (e) {
+    toast('Erro ao abrir PDF: ' + e.message, 'error');
+  } finally {
+    hideLoading();
+  }
 }
 
-function openDemo() {
+on('btn-demo', 'click', () => {
   showMain();
-  if (!annotation) initCanvases();
+  initCanvas();
+  // Página demo A4
   const dpr = window.devicePixelRatio || 1;
-  const W = Math.round(794 * dpr), H = Math.round(1123 * dpr);
-  [pdfCanvas, annotationCanvas, remoteCanvas, gridCanvas].forEach(c => {
+  const W = Math.round(794*dpr), H = Math.round(1123*dpr);
+  [cPDF, cAnnot, cRemote, cGrid].forEach(c => {
     if (!c) return;
     c.width = W; c.height = H;
     c.style.width = '794px'; c.style.height = '1123px';
   });
-  const ctx = pdfCanvas.getContext('2d');
-  ctx.fillStyle='#fff'; ctx.fillRect(0,0,W,H);
-  ctx.save(); ctx.scale(dpr, dpr);
-  ctx.fillStyle='#1a1a2e'; ctx.font='bold 30px sans-serif'; ctx.textAlign='center';
-  ctx.fillText('DigiCanvas — Modo Demo', 397, 88);
-  ctx.font='14px sans-serif'; ctx.fillStyle='#666';
-  ctx.fillText('Conecte o celular para começar', 397, 128);
+  const ctx = cPDF.getContext('2d');
+  ctx.fillStyle = '#fff'; ctx.fillRect(0,0,W,H);
+  ctx.save(); ctx.scale(dpr,dpr);
+  ctx.fillStyle='#1a1a2e'; ctx.font='bold 28px sans-serif'; ctx.textAlign='center';
+  ctx.fillText('DigiCanvas — Modo Demo', 397, 80);
+  ctx.font='14px sans-serif'; ctx.fillStyle='#888';
+  ['Abra um PDF ou conecte o celular.','1 dedo = desenha | 2 dedos = move/zoom'].forEach((t,i) =>
+    ctx.fillText(t, 397, 130 + i*28)
+  );
   ctx.restore();
-  $('pdf-filename').textContent = 'Demo';
-  $('page-info').textContent    = '1 / 1';
-  annotation?.onCanvasResize();
+  $('page-info').textContent = '1 / 1';
+  annot?.onResize();
   drawGrid();
-  broadcastPdfInfo();
-}
+  broadcastPDF();
+});
 
 function showMain() {
-  $('screen-welcome').classList.remove('active');
+  $('screen-welcome')?.classList.remove('active');
   const sm = $('screen-main');
-  sm.classList.add('active'); sm.style.display = 'flex';
+  if (sm) { sm.classList.add('active'); sm.style.display = 'flex'; }
 }
 
-// ══════════════════════════════════════════════════════════════════════════
-// CANVAS / VIEWER / ANNOTATION
-// ══════════════════════════════════════════════════════════════════════════
+// ── Init canvas + viewer + annotation ────────────────────────────────────────
 
-function initCanvases() {
-  annotation = new AnnotationEngine(
-    annotationCanvas, remoteCanvas,
-    () => ({ w: pdfCanvas.width / (window.devicePixelRatio||1), h: pdfCanvas.height / (window.devicePixelRatio||1) })
-  );
-  annotation.clearMode = getPrefs().clearMode || 'shared';
+function initCanvas() {
+  if (annot) return; // já inicializado
+  annot = new Annotation(cAnnot, cRemote);
 
-  // Callbacks: stroke local → envia ao celular com coordenadas NORMALIZADAS
-  annotation.onStrokeStart = ({ tool, color, size, nx, ny }) => {
+  annot.onStart = ({ tool, color, size, nx, ny, page }) => {
     strokeId++;
-    annotation._curId = `h${strokeId}`;
-    peer?.send({ type:'stroke:start', id:annotation._curId, tool, color, size, nx, ny });
+    annot._curId = `h${strokeId}`;
+    peer?.send({ type:'stroke:start', id:annot._curId, tool, color, size, nx, ny, page });
   };
-  annotation.onStrokeMove = ({ nx, ny }) => {
-    peer?.send({ type:'stroke:move', id:annotation._curId, nx, ny });
-  };
-  annotation.onStrokeEnd = () => {
-    peer?.send({ type:'stroke:end', id:annotation._curId });
-  };
+  annot.onMove = ({ nx, ny }) => peer?.send({ type:'stroke:move', id:annot._curId, nx, ny });
+  annot.onEnd  = () => peer?.send({ type:'stroke:end', id:annot._curId });
 
-  viewer = new PDFViewer(pdfCanvas);
-  viewer.onLoading = b => b ? showLoading('Renderizando…') : hideLoading();
-  viewer.onRender  = async (page, total) => {
+  viewer = new PDFViewer(cPDF);
+  viewer.onRender = (page, total) => {
     $('page-info').textContent  = `${page} / ${total}`;
     $('zoom-level').textContent = Math.round(viewer.scale * 100) + '%';
-    annotation.onCanvasResize();
-    annotation.setPage(page);
+    // Sincroniza tamanho dos canvas overlay
+    [cAnnot, cRemote, cGrid].forEach(c => {
+      if (!c) return;
+      c.width  = cPDF.width;  c.height = cPDF.height;
+      c.style.width  = cPDF.style.width;
+      c.style.height = cPDF.style.height;
+    });
+    annot.setPage(page);
+    annot.onResize();
     drawGrid();
-    broadcastPdfInfo();
-    // Avisa o celular qual página está visível — ele usa isso para indexar strokes
-    peer?.send({ type: 'pdf:page', page, total });
+    broadcastPDF();
+    peer?.send({ type:'pdf:page', page, total });
   };
-
-  // Aplica modo inicial
-  applyModeToUI(State.get('pcMode'));
-  applyPrefsToUI();
 }
 
-// ── Grid ──────────────────────────────────────────────────────────────────
+// ── Grid ──────────────────────────────────────────────────────────────────────
 
 function drawGrid() {
-  if (!gridCanvas) return;
-  const ctx = gridCanvas.getContext('2d');
-  ctx.clearRect(0, 0, gridCanvas.width, gridCanvas.height);
+  if (!cGrid) return;
+  const ctx = cGrid.getContext('2d');
+  ctx.clearRect(0, 0, cGrid.width, cGrid.height);
   if (!getPrefs().gridEnabled) return;
   const dpr = window.devicePixelRatio || 1;
-  const step = 40 * dpr, W = gridCanvas.width, H = gridCanvas.height;
-  ctx.strokeStyle = 'rgba(124,106,247,0.18)'; ctx.lineWidth = 1;
-  for (let x=0; x<W; x+=step) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke(); }
-  for (let y=0; y<H; y+=step) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke(); }
+  const step = 40 * dpr;
+  ctx.strokeStyle = 'rgba(124,106,247,0.18)'; ctx.lineWidth = 0.5;
+  for (let x = 0; x < cGrid.width;  x += step) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,cGrid.height); ctx.stroke(); }
+  for (let y = 0; y < cGrid.height; y += step) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(cGrid.width,y);  ctx.stroke(); }
 }
 
-// ── Broadcast PDF ─────────────────────────────────────────────────────────
+// ── Broadcast PDF ao celular ──────────────────────────────────────────────────
 
-async function broadcastPdfInfo() {
-  if (!peer || peer.state !== ConnState.CONNECTED) return;
+async function broadcastPDF() {
+  if (!peer || peer.state !== CS.CONNECTED || !cPDF.width) return;
   const dpr = window.devicePixelRatio || 1;
-  const w   = pdfCanvas.width / dpr, h = pdfCanvas.height / dpr;
+  const w = cPDF.width / dpr, h = cPDF.height / dpr;
   peer.send({ type:'pdf:size', w, h });
-  State.set('pdfSize', { w, h });
+
+  // Thumb 400px para o celular usar como fundo
   try {
-    const thumb = viewer?.pdfDoc
-      ? await viewer.getThumbnail(420)
-      : canvasToJpeg(pdfCanvas, 420);
+    const thumb = viewer?.doc
+      ? await viewer.thumbnail(400)
+      : (() => {
+          const t = document.createElement('canvas');
+          const s = Math.min(1, 400 / (cPDF.width/dpr));
+          t.width = Math.round(cPDF.width/dpr*s); t.height = Math.round(cPDF.height/dpr*s);
+          t.getContext('2d').drawImage(cPDF, 0, 0, t.width, t.height);
+          return t.toDataURL('image/jpeg', 0.72);
+        })();
     if (thumb) peer.send({ type:'pdf:thumb', data: thumb });
-  } catch { /**/ }
+  } catch {}
 }
 
-function canvasToJpeg(canvas, maxW) {
-  const dpr = window.devicePixelRatio || 1;
-  const cw = canvas.width/dpr, ch = canvas.height/dpr;
-  const sc = Math.min(1, maxW/cw);
-  const tmp = document.createElement('canvas');
-  tmp.width  = Math.round(cw*sc*dpr);
-  tmp.height = Math.round(ch*sc*dpr);
-  tmp.getContext('2d').drawImage(canvas, 0, 0, tmp.width, tmp.height);
-  return tmp.toDataURL('image/jpeg', 0.72);
-}
+// ══════════════════════════════════════════════════════════════════════════════
+// CONTROLES DO PDF
+// ══════════════════════════════════════════════════════════════════════════════
 
-// ══════════════════════════════════════════════════════════════════════════
-// CONTROLES PDF
-// ══════════════════════════════════════════════════════════════════════════
+on('btn-prev',    'click', () => viewer?.prev());
+on('btn-next',    'click', () => viewer?.next());
+on('btn-zoom-in', 'click', () => viewer?.zoomIn());
+on('btn-zoom-out','click', () => viewer?.zoomOut());
+on('btn-fit',     'click', () => viewer?.fit(cWrapper));
 
-on('btn-prev-page', 'click', () => viewer?.prevPage());
-on('btn-next-page', 'click', () => viewer?.nextPage());
-on('btn-zoom-in',   'click', () => viewer?.zoomIn());
-on('btn-zoom-out',  'click', () => viewer?.zoomOut());
-on('btn-zoom-fit',  'click', () => viewer?.fitToContainer(canvasWrapper));
-
-canvasWrapper?.addEventListener('wheel', e => {
+// Ctrl+scroll para zoom
+cWrapper?.addEventListener('wheel', e => {
   if (!e.ctrlKey && !e.metaKey) return;
   e.preventDefault();
   e.deltaY < 0 ? viewer?.zoomIn(0.1) : viewer?.zoomOut(0.1);
-}, { passive:false });
+}, { passive: false });
 
-// ══════════════════════════════════════════════════════════════════════════
-// MÁQUINA DE ESTADOS: draw | move | resize  (#3)
-// ══════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════════
+// MODOS: draw | move
+// ══════════════════════════════════════════════════════════════════════════════
 
-/** Define o modo e atualiza UI/handlers */
-function setMode(mode) {
-  State.set('pcMode', mode);
+function setMode(m) {
+  pcMode = m;
+  qsa('[data-mode]').forEach(b => b.classList.toggle('active', b.dataset.mode === m));
+  $('mode-label').textContent = m === 'draw' ? 'Desenhar' : 'Mover VP';
+  annot?.setEnabled(m === 'draw');
+  if (cAnnot) cAnnot.style.cursor = m === 'draw' ? 'crosshair' : 'default';
+  if (cVP) cVP.style.pointerEvents = m === 'move' ? 'all' : 'none';
 }
 
-function applyModeToUI(mode) {
-  document.querySelectorAll('[data-pc-mode]').forEach(b =>
-    b.classList.toggle('active', b.dataset.pcMode === mode)
-  );
-  const label = $('pc-mode-label');
-  if (label) label.textContent = { draw:'Desenhar', move:'Mover caixa' }[mode] ?? mode;
+qsa('[data-mode]').forEach(b => b.addEventListener('click', () => setMode(b.dataset.mode)));
 
-  // Annotation recebe eventos SOMENTE no modo draw
-  annotation?.setActive(mode === 'draw');
-
-  // Cursor no canvas de anotação + wrapper
-  if (annotationCanvas) {
-    annotationCanvas.style.cursor = mode === 'draw' ? 'crosshair' : 'default';
-  }
-  if (canvasWrapper) {
-    canvasWrapper.style.cursor = mode === 'draw' ? 'crosshair' : (mode === 'move' ? 'default' : 'default');
-  }
-  // Cursor no indicator
-  if (viewportIndicator) {
-    viewportIndicator.style.cursor = mode === 'move' ? 'grab' : 'default';
-    // Pointer-events: só mode move/resize captura eventos no indicator
-    viewportIndicator.style.pointerEvents = mode === 'move' ? 'all' : 'none';
-  }
-}
-
-document.querySelectorAll('[data-pc-mode]').forEach(btn => {
-  btn.addEventListener('click', () => setMode(btn.dataset.pcMode));
+// Arraste do indicador de viewport no modo "move"
+let _vpDrag = null;
+cVP?.addEventListener('pointerdown', e => {
+  if (pcMode !== 'move') return;
+  e.preventDefault(); cVP.setPointerCapture(e.pointerId);
+  const vp = vpState;
+  _vpDrag = { sx: e.clientX, sy: e.clientY, nx0: vp.nx, ny0: vp.ny };
+  cVP.style.cursor = 'grabbing';
 });
-
-// Atalhos de modo (D = draw, V = move, R = resize)
-document.addEventListener('keydown', e => {
-  if (['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName)) return;
-  if (e.key === 'd') setMode('draw');
-  if (e.key === 'v') setMode('move');
-});
-
-// ── Viewport Indicator: Move e Resize (pointer events robustos) ────────────
-
-let vpInteraction = null; // { type:'move'|'resize', startX, startY, startNX, startNY, startNW, startNH }
-
-viewportIndicator?.addEventListener('pointerdown', e => {
-  const mode = State.get('pcMode');
-  if (mode !== 'move') return;
-  e.preventDefault(); e.stopPropagation();
-  viewportIndicator.setPointerCapture(e.pointerId);
-
-  const vp = State.get('viewport');
-  vpInteraction = {
-    type: mode,
-    startX: e.clientX, startY: e.clientY,
-    startNX: vp.nx, startNY: vp.ny,
-    startNW: vp.nw, startNH: vp.nh,
-  };
-  if (mode === 'move') viewportIndicator.style.cursor = 'grabbing';
-});
-
-viewportIndicator?.addEventListener('pointermove', e => {
-  if (!vpInteraction) return;
+cVP?.addEventListener('pointermove', e => {
+  if (!_vpDrag) return;
   e.preventDefault();
-
   const dpr = window.devicePixelRatio || 1;
-  const W   = pdfCanvas.width / dpr;
-  const H   = pdfCanvas.height / dpr;
-  if (!W || !H) return;
-
-  const dx = e.clientX - vpInteraction.startX;
-  const dy = e.clientY - vpInteraction.startY;
-
-  if (vpInteraction.type === 'move') {
-    // Bug #1: clamp correto — nx ∈ [0, 1-nw], ny ∈ [0, 1-nh]
-    const nw = vpInteraction.startNW;
-    const nh = vpInteraction.startNH;
-    const nx = clamp(vpInteraction.startNX + dx/W, 0, Math.max(0, 1 - nw));
-    const ny = clamp(vpInteraction.startNY + dy/H, 0, Math.max(0, 1 - nh));
-    const newVP = { ...State.get('viewport'), nx, ny };
-    State.set('viewport', newVP);
-    positionIndicator(newVP);
-    peer?.send({ type:'viewport:set', nx, ny });
-
-  }
+  const W = cPDF.width/dpr, H = cPDF.height/dpr;
+  const dx = e.clientX - _vpDrag.sx, dy = e.clientY - _vpDrag.sy;
+  const nx = Math.max(0, Math.min(_vpDrag.nx0 + dx/W, Math.max(0, 1 - vpState.nw)));
+  const ny = Math.max(0, Math.min(_vpDrag.ny0 + dy/H, Math.max(0, 1 - vpState.nh)));
+  vpState = { ...vpState, nx, ny };
+  positionVP();
+  peer?.send({ type:'viewport:set', nx, ny });
 });
+cVP?.addEventListener('pointerup',    () => { _vpDrag = null; if (pcMode==='move') cVP.style.cursor='grab'; });
+cVP?.addEventListener('pointercancel',() => { _vpDrag = null; });
 
-viewportIndicator?.addEventListener('pointerup', e => {
-  vpInteraction = null;
-  if (State.get('pcMode') === 'move') viewportIndicator.style.cursor = 'grab';
-});
-
-viewportIndicator?.addEventListener('pointercancel', () => { vpInteraction = null; });
-
-function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
-
-function positionIndicator(vp) {
-  if (!viewportIndicator) return;
+function positionVP() {
+  if (!cVP) return;
   const dpr = window.devicePixelRatio || 1;
-  const W   = pdfCanvas.width / dpr;
-  const H   = pdfCanvas.height / dpr;
+  const W = cPDF.width/dpr, H = cPDF.height/dpr;
   if (!W || !H) return;
-  const x = vp.nx * W;
-  const y = vp.ny * H;
-  const w = Math.max(8, vp.nw * W);
-  const h = Math.max(8, vp.nh * H);
-  // Clamp visual (indicator nunca sai do canvas)
-  const cx = clamp(x, 0, W - w);
-  const cy = clamp(y, 0, H - h);
-  viewportIndicator.style.left   = cx + 'px';
-  viewportIndicator.style.top    = cy + 'px';
-  viewportIndicator.style.width  = w + 'px';
-  viewportIndicator.style.height = h + 'px';
-  viewportIndicator.style.display = 'block';
+  const { nx, ny, nw, nh } = vpState;
+  const x = nx*W, y = ny*H, w = Math.max(8, nw*W), h = Math.max(8, nh*H);
+  const cx = Math.max(0, Math.min(x, W-w)), cy = Math.max(0, Math.min(y, H-h));
+  Object.assign(cVP.style, { display:'block', left:cx+'px', top:cy+'px', width:w+'px', height:h+'px' });
 }
 
-// ══════════════════════════════════════════════════════════════════════════
-// FERRAMENTAS
-// ══════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════════
+// FERRAMENTAS DE ANOTAÇÃO
+// ══════════════════════════════════════════════════════════════════════════════
 
-document.querySelectorAll('.tool-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    annotation?.setTool(btn.dataset.tool);
-    setPref('tool', btn.dataset.tool);
-    // Ao clicar em ferramenta → volta ao modo draw
-    if (State.get('pcMode') !== 'draw') setMode('draw');
-  });
-});
+qsa('[data-tool]').forEach(b => b.addEventListener('click', () => {
+  qsa('[data-tool]').forEach(x => x.classList.remove('active'));
+  b.classList.add('active');
+  annot?.setTool(b.dataset.tool);
+  setPref('tool', b.dataset.tool);
+  if (pcMode !== 'draw') setMode('draw');
+}));
 
-on('stroke-size-slider', 'input', e => {
+on('stroke-color', 'input', e => { annot?.setColor(e.target.value); setPref('color', e.target.value); });
+
+on('stroke-size', 'input', e => {
   const v = parseInt(e.target.value);
-  annotation?.setSize(v);
-  const lbl=$('stroke-size-label'); if (lbl) lbl.textContent=v;
-  setPref('size', v);
+  annot?.setSize(v); setPref('size', v);
+  const lbl = $('stroke-size-label'); if (lbl) lbl.textContent = v;
 });
 
-on('stroke-color', 'input', e => annotation?.setColor(e.target.value));
+on('btn-undo', 'click', () => { if (annot?.undo()) peer?.send({ type:'undo' }); });
+on('btn-redo', 'click', () => { if (annot?.redo()) peer?.send({ type:'redo' }); });
 
-on('btn-undo', 'click', () => { if (annotation?.undo()) peer?.send({ type:'undo' }); });
-on('btn-redo', 'click', () => { if (annotation?.redo()) peer?.send({ type:'redo' }); });
+on('btn-clear-all',    'click', () => { annot?.clearAll();    peer?.send({ type:'clear:all' }); });
+on('btn-clear-local',  'click', () => { annot?.clearLocal();  peer?.send({ type:'clear:local' }); });
+on('btn-clear-remote', 'click', () => { annot?.clearRemote(); peer?.send({ type:'clear:remote' }); });
 
-// Split Limpar
-on('btn-clear-all',    'click', () => { annotation?.clear();       peer?.send({ type:'clear:all' });    toast('Tudo limpo','info'); });
-on('btn-clear-local',  'click', () => { annotation?.clearLocal();  peer?.send({ type:'clear:local' });  toast('PC limpo','info'); });
-on('btn-clear-remote', 'click', () => { annotation?.clearRemote(); peer?.send({ type:'clear:remote' }); toast('Celular limpo','info'); });
-
-// Split Export
-on('btn-export-all',    'click', () => doExport({ includeLocal:true,  includeRemote:true  }, 'completo'));
-on('btn-export-local',  'click', () => doExport({ includeLocal:true,  includeRemote:false }, 'pc'));
-on('btn-export-remote', 'click', () => doExport({ includeLocal:false, includeRemote:true  }, 'celular'));
-
-function doExport(opts, suffix) {
-  if (!annotation) { toast('Nada para exportar','error'); return; }
+on('btn-export', 'click', () => {
+  if (!annot) return;
   const a = document.createElement('a');
-  a.href     = annotation.exportPNG(opts);
-  a.download = (currentFile?.name?.replace('.pdf','') ?? 'digicanvas') + `-${suffix}.png`;
-  a.click();
-  toast('Exportado!', 'success');
-}
+  a.href = annot.exportPNG(); a.download = 'digicanvas.png'; a.click();
+});
 
-// ══════════════════════════════════════════════════════════════════════════
-// TOGGLES
-// ══════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════════
+// TOGGLES DO PAINEL
+// ══════════════════════════════════════════════════════════════════════════════
 
-on('toggle-remote-strokes', 'change', e => {
-  if (annotation) annotation.showRemote = e.target.checked;
-  if (remoteCanvas) remoteCanvas.style.display = e.target.checked ? '' : 'none';
+on('toggle-remote', 'change', e => {
+  if (annot) annot.showRemote = e.target.checked;
+  if (cRemote) cRemote.style.display = e.target.checked ? '' : 'none';
   setPref('showRemote', e.target.checked);
 });
 
-on('toggle-follow-vp', 'change', e => {
-  State.set('followViewport', e.target.checked);
-  setPref('followViewport', e.target.checked);
-  syncFollowBtn(e.target.checked);
+on('toggle-grid', 'change', e => { setPref('gridEnabled', e.target.checked); drawGrid(); });
+
+on('toggle-follow', 'change', e => {
+  followVP = e.target.checked; setPref('followVP', followVP);
+  syncFollowBtn();
 });
 
-// ── Botão rápido de follow na toolbar ─────────────────────────────────────
-// Sincroniza o botão da toolbar com o estado interno
-function syncFollowBtn(following) {
-  const btn      = $('btn-follow-toggle');
-  const iconLock = $('follow-icon-lock');
-  const iconOpen = $('follow-icon-unlock');
-  if (!btn) return;
-  btn.classList.toggle('follow-active', following);
-  btn.setAttribute('aria-pressed', following);
-  if (iconLock) iconLock.style.display = following ? 'block' : 'none';
-  if (iconOpen) iconOpen.style.display = following ? 'none'  : 'block';
-}
-
-on('btn-follow-toggle', 'click', () => {
-  const current = State.get('followViewport') ?? true;
-  const next    = !current;
-  State.set('followViewport', next);
-  setPref('followViewport', next);
-  // Mantém checkbox do painel sincronizado
-  const chk = $('toggle-follow-vp');
-  if (chk) chk.checked = next;
-  syncFollowBtn(next);
-  toast(next ? '🔗 Acompanhando viewport' : '🔓 Viewport livre', 'info');
-});
-
-on('toggle-zoom-lock-desktop', 'change', e => {
-  State.merge('viewport', { locked: e.target.checked });
+on('toggle-zoom-lock', 'change', e => {
   setPref('zoomLocked', e.target.checked);
   peer?.send({ type:'state:sync', zoomLocked: e.target.checked });
   toast(e.target.checked ? '🔒 Zoom travado' : '🔓 Zoom liberado', 'info');
 });
 
-on('toggle-grid', 'change', e => {
-  setPref('gridEnabled', e.target.checked);
-  drawGrid();
+// Botão rápido follow na toolbar
+on('btn-follow-toggle', 'click', () => {
+  followVP = !followVP; setPref('followVP', followVP);
+  const chk = $('toggle-follow'); if (chk) chk.checked = followVP;
+  syncFollowBtn();
+  toast(followVP ? '🔗 Acompanhando viewport' : '🔓 Viewport livre', 'info');
 });
 
-on('select-clear-mode', 'change', e => {
-  const mode = e.target.value;
-  if (annotation) annotation.clearMode = mode;
-  State.set('clearMode', mode);
-  setPref('clearMode', mode);
-});
-
-document.querySelectorAll('[data-theme-btn]').forEach(btn => {
-  btn.addEventListener('click', () => {
-    setTheme(btn.dataset.themeBtn);
-    document.querySelectorAll('[data-theme-btn]').forEach(b => b.classList.toggle('active', b === btn));
-    toast('Tema: ' + btn.dataset.themeBtn, 'info');
-  });
-});
-
-function applyPrefsToUI() {
-  const p = getPrefs();
-  const chk = (id, v) => { const el=$(id); if (el) el.checked=v; };
-  chk('toggle-remote-strokes', p.showRemote ?? true);
-  chk('toggle-zoom-lock-desktop', p.zoomLocked ?? false);
-  chk('toggle-grid',           p.gridEnabled ?? false);
-  chk('toggle-follow-vp',      p.followViewport ?? true);
-
-  const slider=$('stroke-size-slider'); if (slider) slider.value = p.size ?? 3;
-  const slbl=$('stroke-size-label');    if (slbl)   slbl.textContent = p.size ?? 3;
-  const cm=$('select-clear-mode');      if (cm)     cm.value = p.clearMode ?? 'shared';
-
-  document.querySelectorAll('[data-theme-btn]').forEach(b =>
-    b.classList.toggle('active', b.dataset.themeBtn === getTheme())
-  );
-
-  // Sincroniza botão de follow na toolbar
-  syncFollowBtn(p.followViewport ?? true);
+function syncFollowBtn() {
+  const btn = $('btn-follow-toggle');
+  if (!btn) return;
+  btn.classList.toggle('active', followVP);
+  btn.title = followVP ? 'Viewport livre (K)' : 'Acompanhar viewport (K)';
 }
 
-// ══════════════════════════════════════════════════════════════════════════
-// RECENTES
-// ══════════════════════════════════════════════════════════════════════════
+// Temas
+qsa('[data-theme]').forEach(b => b.addEventListener('click', () => {
+  setTheme(b.dataset.theme);
+  qsa('[data-theme]').forEach(x => x.classList.toggle('active', x === b));
+  toast('Tema: ' + b.dataset.theme, 'info');
+}));
 
-function renderRecents() {
-  const c=$('recents-list'); if (!c) return;
-  const list = getRecents();
-  if (!list.length) { c.innerHTML='<p class="recents-empty">Nenhum arquivo recente</p>'; return; }
-  c.innerHTML = list.map(r => `
-    <div class="recent-item" data-name="${r.name}">
-      <div class="recent-thumb">${r.thumb?`<img src="${r.thumb}" alt="" />`:'<div class="thumb-placeholder">PDF</div>'}</div>
-      <div class="recent-info">
-        <span class="recent-name" title="${r.name}">${r.name}</span>
-        <span class="recent-size">${fmtSize(r.size)}</span>
-      </div>
-      <button class="recent-remove" data-name="${r.name}">×</button>
-    </div>`).join('');
-  c.querySelectorAll('.recent-item').forEach(el => {
-    el.addEventListener('click', e => {
-      if (e.target.classList.contains('recent-remove')) {
-        e.stopPropagation(); removeRecent(e.target.dataset.name); renderRecents(); return;
-      }
-      toast('Use "Abrir PDF" para reabrir','info');
-    });
-  });
-}
-const fmtSize = b => !b?'': b<1024?b+'B': b<1048576?(b/1024).toFixed(1)+'KB':(b/1048576).toFixed(1)+'MB';
-on('btn-clear-recents','click',()=>{ clearRecents(); renderRecents(); });
+// ══════════════════════════════════════════════════════════════════════════════
+// ATALHOS DE TECLADO
+// ══════════════════════════════════════════════════════════════════════════════
 
-// ══════════════════════════════════════════════════════════════════════════
-// WEBRTC
-// ══════════════════════════════════════════════════════════════════════════
+document.addEventListener('keydown', e => {
+  if (['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName)) return;
+  const key = (e.ctrlKey||e.metaKey?'c+':'') + (e.shiftKey?'s+':'') + e.key.toLowerCase();
+  const map = {
+    'arrowleft':'prev','arrowright':'next','c+z':'undo','c+s+z':'redo',
+    'p':'pen','m':'marker','h':'highlighter','e':'eraser','l':'line','r':'rect',
+    'd':'draw','v':'move','f':'fit','g':'grid','k':'follow','t':'theme',
+    '+':'zoomin','-':'zoomout','c+e':'export','c+o':'open',
+  };
+  const act = map[key]; if (!act) return;
+  e.preventDefault();
+  ({
+    prev:   () => viewer?.prev(),
+    next:   () => viewer?.next(),
+    undo:   () => { if (annot?.undo()) peer?.send({type:'undo'}); },
+    redo:   () => { if (annot?.redo()) peer?.send({type:'redo'}); },
+    pen:    () => document.querySelector('[data-tool="pen"]')?.click(),
+    marker: () => document.querySelector('[data-tool="marker"]')?.click(),
+    highlighter: () => document.querySelector('[data-tool="highlighter"]')?.click(),
+    eraser: () => document.querySelector('[data-tool="eraser"]')?.click(),
+    line:   () => document.querySelector('[data-tool="line"]')?.click(),
+    rect:   () => document.querySelector('[data-tool="rect"]')?.click(),
+    draw:   () => setMode('draw'),
+    move:   () => setMode('move'),
+    fit:    () => viewer?.fit(cWrapper),
+    grid:   () => { const el=$('toggle-grid'); if(el){el.checked=!el.checked;el.dispatchEvent(new Event('change'));} },
+    follow: () => $('btn-follow-toggle')?.click(),
+    theme:  () => { const t=cycleTheme(); toast('Tema: '+t,'info'); },
+    zoomin: () => viewer?.zoomIn(),
+    zoomout:() => viewer?.zoomOut(),
+    export: () => $('btn-export')?.click(),
+    open:   () => $('file-input')?.click(),
+  })[act]?.();
+});
 
-on('btn-generate-code', 'click', async () => {
+// ══════════════════════════════════════════════════════════════════════════════
+// WEBRTC — HOST
+// ══════════════════════════════════════════════════════════════════════════════
+
+on('btn-generate', 'click', async () => {
   if (peer) await peer.disconnect();
-  sessionCode = generateCode();
-  renderCode(sessionCode);
+  code = generateCode();
+  renderCode(code);
   $('code-display')?.classList.remove('hidden');
-  peer = new DigiPeer({
-    role:'host', code:sessionCode,
-    onStateChange: handleStateChange,
-    onMessage:     handleMessage,
-  });
-  try { await peer.startAsHost(); }
-  catch (err) { toast('Erro: '+err.message,'error',6000); }
+  peer = new Peer({ role:'host', code, onState: handleState, onMsg: handleMsg });
+  try { await peer.startHost(); }
+  catch (err) { toast('Erro: '+err.message,'error',5000); }
 });
 
-on('btn-disconnect','click', async () => {
-  await peer?.disconnect(); peer=null;
-  $('conn-status')?.classList.add('hidden');
-  $('conn-setup').style.display='';
+on('btn-disconnect', 'click', async () => {
+  await peer?.disconnect(); peer = null;
+  $('conn-badge')?.classList.add('hidden');
+  $('conn-setup').style.display = '';
   $('code-display')?.classList.add('hidden');
-  if (viewportIndicator) viewportIndicator.style.display='none';
-  setStatusDot('disconnected');
-  const sl=$('status-label'); if (sl) sl.textContent='Desconectado';
+  if (cVP) cVP.style.display = 'none';
+  setDot('disconnected');
 });
 
-function handleStateChange(state) {
-  setStatusDot(
-    state===ConnState.CONNECTED?'connected': state===ConnState.CONNECTING?'connecting':'disconnected'
-  );
-  const sl=$('status-label');
-  if (state===ConnState.CONNECTED) {
-    $('conn-setup').style.display='none';
-    $('conn-status')?.classList.remove('hidden');
-    if (sl) sl.textContent='Conectado';
-    toast('📱 Celular conectado!','success');
-    State.set('connected', true);
+function handleState(s) {
+  setDot(s === CS.CONNECTED ? 'connected' : s === CS.CONNECTING ? 'connecting' : 'disconnected');
+  if (s === CS.CONNECTED) {
+    $('conn-setup').style.display = 'none';
+    $('conn-badge')?.classList.remove('hidden');
+    toast('📱 Celular conectado!', 'success');
     setTimeout(() => {
-      broadcastPdfInfo();
-      const prefs = getPrefs();
-      peer?.send({ type:'state:sync', zoomLocked:prefs.zoomLocked??false, gridEnabled:prefs.gridEnabled??false, clearMode:prefs.clearMode??'shared' });
+      broadcastPDF();
+      peer?.send({ type:'pdf:page', page: viewer?.page ?? 1, total: viewer?.total ?? 1 });
+      peer?.send({ type:'state:sync',
+        zoomLocked:  getPrefs().zoomLocked  ?? false,
+        gridEnabled: getPrefs().gridEnabled ?? false,
+      });
     }, 400);
   }
-  if (state===ConnState.DISCONNECTED) {
-    $('conn-status')?.classList.add('hidden');
-    $('conn-setup').style.display='';
-    if (viewportIndicator) viewportIndicator.style.display='none';
-    if (sl) sl.textContent='Desconectado';
-    if (peer) toast('Celular desconectado','error');
-    State.set('connected', false);
-  }
-  if (state===ConnState.ERROR) {
-    $('conn-status')?.classList.add('hidden');
-    $('conn-setup').style.display='';
-    if (sl) sl.textContent='Erro';
-    toast('Erro WebRTC','error');
-    State.set('connected', false);
+  if (s === CS.DISCONNECTED) {
+    $('conn-badge')?.classList.add('hidden');
+    $('conn-setup').style.display = '';
+    if (cVP) cVP.style.display = 'none';
+    if (peer) toast('Celular desconectado', 'error');
   }
 }
 
-function handleMessage(msg) {
+function handleMsg(msg) {
   if (!msg?.type) return;
   switch (msg.type) {
-    // Traços do celular → remoteCanvas do desktop
     case 'stroke:start':
     case 'stroke:move':
     case 'stroke:end':
-      annotation?.applyRemoteMessage(msg); break;
+    case 'clear:all': case 'clear:local': case 'clear:remote':
+    case 'undo':
+      annot?.applyMsg(msg); break;
 
-    // Limpeza
-    case 'clear:all':    annotation?.clear();        break;
-    case 'clear:local':  annotation?.clearRemote();  break; // celular limpou os dele → remove camada remota no desktop
-    case 'clear:remote': annotation?.clearLocal();   break; // celular pediu que desktop limpe
-    case 'clear':        annotation?.[annotation.clearMode==='shared'?'clear':'clearRemote'](); break;
-    case 'undo':         annotation?.applyRemoteMessage({type:'undo'});  break;
-    case 'redo':         annotation?.applyRemoteMessage({type:'redo:stroke'}); break;
+    case 'viewport':
+      receiveVP(msg); break;
 
-    // Viewport report do celular
-    case 'viewport':     receiveViewport(msg); break;
-
-    // Sincronização de estado
     case 'state:sync':
-      if (typeof msg.zoomLocked==='boolean') {
-        State.merge('viewport',{locked:msg.zoomLocked});
-        const el=$('toggle-zoom-lock-desktop'); if (el) el.checked=msg.zoomLocked;
-        toast(msg.zoomLocked?'🔒 Zoom travado pelo celular':'🔓 Zoom liberado','info');
-        peer?.send({type:'state:sync', zoomLocked:msg.zoomLocked}); // confirma
+      if (typeof msg.zoomLocked === 'boolean') {
+        setPref('zoomLocked', msg.zoomLocked);
+        const el = $('toggle-zoom-lock'); if (el) el.checked = msg.zoomLocked;
+        toast(msg.zoomLocked ? '🔒 Zoom travado pelo celular' : '🔓 Zoom liberado', 'info');
+        peer?.send({ type:'state:sync', zoomLocked: msg.zoomLocked }); // eco
       }
       break;
 
-    case 'request:pdf': broadcastPdfInfo(); break;
+    case 'request:pdf':
+      broadcastPDF();
+      peer?.send({ type:'pdf:page', page: viewer?.page ?? 1, total: viewer?.total ?? 1 });
+      break;
   }
 }
 
-// ── Recebe viewport do celular ────────────────────────────────────────────
-
-function receiveViewport({ nx, ny, nw, nh, zoom }) {
-  // Clamp antes de tudo — garante invariante mesmo se celular enviar lixo
-  const safe_nw = Math.min(Math.max(0.001, nw), 1);
-  const safe_nh = Math.min(Math.max(0.001, nh), 1);
-  const safe_nx = clamp(nx, 0, Math.max(0, 1 - safe_nw));
-  const safe_ny = clamp(ny, 0, Math.max(0, 1 - safe_nh));
-
-  const newVP = { nx:safe_nx, ny:safe_ny, nw:safe_nw, nh:safe_nh, zoom: zoom??1, locked: State.get('viewport')?.locked??false };
-  State.set('viewport', newVP);
-  positionIndicator(newVP);
-
-  const vx=$('vp-x'); if (vx) vx.textContent=Math.round(safe_nx*100)+'%';
-  const vy=$('vp-y'); if (vy) vy.textContent=Math.round(safe_ny*100)+'%';
-  const vz=$('vp-zoom'); if (vz) vz.textContent=(zoom??1).toFixed(2)+'×';
-
-  // followViewport (#8)
-  if (State.get('followViewport') && canvasWrapper) {
-    const dpr = window.devicePixelRatio || 1;
-    const W = pdfCanvas.width/dpr, H = pdfCanvas.height/dpr;
-    const cx = safe_nx*W, cy = safe_ny*H, iw = safe_nw*W, ih = safe_nh*H;
-    canvasWrapper.scrollTo({
-      left: cx - canvasWrapper.clientWidth/2  + iw/2,
-      top:  cy - canvasWrapper.clientHeight/2 + ih/2,
-      behavior: 'smooth',
+function receiveVP({ nx, ny, nw, nh, zoom }) {
+  const snw = Math.max(0.001, Math.min(1, nw));
+  const snh = Math.max(0.001, Math.min(1, nh));
+  const snx = Math.max(0, Math.min(nx, 1 - snw));
+  const sny = Math.max(0, Math.min(ny, 1 - snh));
+  vpState = { nx:snx, ny:sny, nw:snw, nh:snh, zoom: zoom ?? 1 };
+  positionVP();
+  const vx=$('vp-x'),vy=$('vp-y'),vz=$('vp-zoom');
+  if (vx) vx.textContent = Math.round(snx*100)+'%';
+  if (vy) vy.textContent = Math.round(sny*100)+'%';
+  if (vz) vz.textContent = (zoom??1).toFixed(2)+'×';
+  if (followVP && cWrapper) {
+    const dpr=window.devicePixelRatio||1;
+    const W=cPDF.width/dpr, H=cPDF.height/dpr;
+    cWrapper.scrollTo({
+      left: snx*W - cWrapper.clientWidth/2  + snw*W/2,
+      top:  sny*H - cWrapper.clientHeight/2 + snh*H/2,
+      behavior:'smooth',
     });
   }
 }
 
-// ══════════════════════════════════════════════════════════════════════════
-// QR CODE — robusto, com fallback (#7)
-// ══════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════════
+// QR CODE
+// ══════════════════════════════════════════════════════════════════════════════
 
-function renderCode(code) {
-  const el=$('code-digits'); if (!el) return;
-  el.innerHTML='';
-  code.split('').forEach((d,i) => {
-    const s=document.createElement('div');
-    s.className='digit'; s.textContent=d;
-    s.style.animationDelay=`${i*60}ms`;
+function renderCode(c) {
+  const el = $('code-digits'); if (!el) return;
+  el.innerHTML = '';
+  c.split('').forEach((d,i) => {
+    const s = document.createElement('div');
+    s.className='digit'; s.textContent=d; s.style.animationDelay=i*60+'ms';
     el.appendChild(s);
   });
-  renderQR(code);
-}
-
-function renderQR(code) {
-  const qrEl=$('code-qr'); if (!qrEl) return;
-  qrEl.innerHTML='';
-
-  // Constrói URL corretamente para qualquer host
+  // QR
+  const qrEl = $('code-qr'); if (!qrEl) return;
+  qrEl.innerHTML = '';
   let url;
   try {
     const u = new URL(location.href);
-    // Remove index.html e qualquer query/hash
     u.pathname = u.pathname.replace(/\/[^/]*$/, '/') + 'celular.html';
-    u.search = ''; u.hash = '';
-    url = u.toString() + '?code=' + code;
-  } catch {
-    url = './celular.html?code=' + code;
-  }
-
-  const linkEl=$('qr-link'); if (linkEl) linkEl.textContent=url;
-
+    u.search=''; url = u.href + '?code=' + c;
+  } catch { url = './celular.html?code=' + c; }
+  const lnk = $('qr-link'); if (lnk) lnk.textContent = url;
   const render = () => {
     qrEl.innerHTML='';
-    if (typeof QRCode==='undefined') { showQRFallback(qrEl, url); return; }
-    try {
-      const isDark = document.documentElement.getAttribute('data-theme') !== 'light';
-      new QRCode(qrEl, { // eslint-disable-line no-undef
-        text: url, width:128, height:128,
-        colorDark:'#7c6af7',
-        colorLight: isDark ? '#1e1e2e' : '#ffffff',
-        correctLevel: QRCode.CorrectLevel.M, // eslint-disable-line no-undef
-      });
-    } catch { showQRFallback(qrEl, url); }
+    if (typeof QRCode==='undefined') { qrEl.innerHTML=`<input readonly value="${url}" style="font-size:10px;width:100%;padding:4px"/>`; return; }
+    try { new QRCode(qrEl,{text:url,width:120,height:120,colorDark:'#7c6af7',colorLight:'#1e1e2e',correctLevel:QRCode.CorrectLevel.M}); } catch {}
   };
-
-  if (typeof QRCode!=='undefined') { render(); return; }
-  const s=document.createElement('script');
-  s.src='https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js';
-  s.onload=render; s.onerror=()=>showQRFallback(qrEl, url);
-  document.head.appendChild(s);
+  if (typeof QRCode!=='undefined') render();
+  else { const s=document.createElement('script'); s.src='https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js'; s.onload=render; document.head.appendChild(s); }
 }
 
-function showQRFallback(el, url) {
-  el.innerHTML = `<div class="qr-fallback"><span>URL do celular:</span>
-    <input readonly value="${url}" onclick="this.select()"
-      style="font-size:9px;width:100%;margin-top:4px;padding:5px;
-             background:var(--bg3);border:1px solid var(--border);
-             border-radius:4px;color:var(--text);" /></div>`;
+function setDot(s) {
+  const el=$('status-dot'); if(el) el.className='status-dot '+s;
 }
 
-function setStatusDot(s) {
-  const el=$('status-dot'); if (el) el.className=`status-dot ${s}`;
+// ══════════════════════════════════════════════════════════════════════════════
+// RECENTES
+// ══════════════════════════════════════════════════════════════════════════════
+
+function renderRecents() {
+  const c = $('recents-list'); if (!c) return;
+  const list = getRecents();
+  if (!list.length) { c.innerHTML='<p class="recents-empty">Nenhum arquivo recente</p>'; return; }
+  c.innerHTML = list.map(r=>`
+    <div class="recent-item" data-name="${r.name}">
+      <div class="recent-thumb">${r.thumb?`<img src="${r.thumb}"/>`:'<div class="rec-ph">PDF</div>'}</div>
+      <div class="recent-info">
+        <span class="recent-name" title="${r.name}">${r.name}</span>
+        <span class="recent-meta">${fmtSize(r.size)}</span>
+      </div>
+      <button class="recent-del" data-name="${r.name}">×</button>
+    </div>`).join('');
+  c.querySelectorAll('.recent-del').forEach(b => b.addEventListener('click', e => {
+    e.stopPropagation(); removeRecent(b.dataset.name); renderRecents();
+  }));
+  c.querySelectorAll('.recent-item').forEach(el => el.addEventListener('click', e => {
+    if (e.target.classList.contains('recent-del')) return;
+    toast('Use "Abrir PDF" para reabrir o arquivo','info');
+  }));
 }
 
-// ══════════════════════════════════════════════════════════════════════════
-// ATALHOS
-// ══════════════════════════════════════════════════════════════════════════
+const fmtSize = b => !b?'': b<1024?b+'B': b<1048576?(b/1024).toFixed(1)+'KB':(b/1048576).toFixed(1)+'MB';
+on('btn-clear-recents','click',()=>{ clearRecents(); renderRecents(); });
 
-shortcuts.on('undo', () => {
-  if (annotation?.undo()) {
-    peer?.send({ type:'undo' });
-    toast('↩ Desfeito', 'info', 800);
-  }
-});
-shortcuts.on('redo', () => {
-  if (annotation?.redo()) {
-    peer?.send({ type:'redo' });
-    toast('↪ Refeito', 'info', 800);
-  }
-});
-shortcuts.on('clear',   () => { annotation?.clear(); peer?.send({type:'clear:all'}); });
-shortcuts.on('export',  () => doExport({includeLocal:true,includeRemote:true},'completo'));
-shortcuts.on('open',    () => $('file-input')?.click());
-shortcuts.on('zoom-in', () => viewer?.zoomIn());
-shortcuts.on('zoom-out',() => viewer?.zoomOut());
-shortcuts.on('zoom-fit',() => viewer?.fitToContainer(canvasWrapper));
-shortcuts.on('prev-page',()=> viewer?.prevPage());
-shortcuts.on('next-page',()=> viewer?.nextPage());
-shortcuts.on('toggle-grid', () => {
-  const el=$('toggle-grid'); if (el){el.checked=!el.checked; el.dispatchEvent(new Event('change'));}
-});
-shortcuts.on('toggle-theme', () => {
-  const themes=['dark','light','amoled'];
-  const next=themes[(themes.indexOf(getTheme())+1)%themes.length];
-  setTheme(next); toast('Tema: '+next,'info');
-});
-shortcuts.on('toggle-follow', () => $('btn-follow-toggle')?.click());
-['pen','marker','highlighter','eraser','line','rect'].forEach(t =>
-  shortcuts.on(`tool:${t}`, () => document.querySelector(`.tool-btn[data-tool="${t}"]`)?.click())
-);
+// ══════════════════════════════════════════════════════════════════════════════
+// RESTORE PREFS
+// ══════════════════════════════════════════════════════════════════════════════
+
+function restorePrefs() {
+  const p = getPrefs();
+  const chk=(id,v)=>{ const el=$(id); if(el) el.checked=v; };
+  chk('toggle-remote',  p.showRemote    ?? true);
+  chk('toggle-grid',    p.gridEnabled   ?? false);
+  chk('toggle-follow',  p.followVP      ?? true);
+  chk('toggle-zoom-lock', p.zoomLocked  ?? false);
+  followVP = p.followVP ?? true;
+  syncFollowBtn();
+
+  const ss=$('stroke-size'); if(ss) ss.value=p.size??3;
+  const sl=$('stroke-size-label'); if(sl) sl.textContent=p.size??3;
+  const sc=$('stroke-color'); if(sc) sc.value=p.color??'#e63946';
+
+  // Restaura ferramenta ativa
+  const toolBtn = document.querySelector(`[data-tool="${p.tool||'pen'}"]`);
+  if (toolBtn) { qsa('[data-tool]').forEach(x=>x.classList.remove('active')); toolBtn.classList.add('active'); }
+
+  qsa('[data-theme]').forEach(b=>b.classList.toggle('active', b.dataset.theme===getTheme()));
+}
+
+// Dropdown tabs do painel
+qsa('.panel-tab').forEach(b => b.addEventListener('click', () => {
+  qsa('.panel-tab').forEach(x=>x.classList.remove('active'));
+  qsa('.tab-content').forEach(x=>x.classList.remove('active'));
+  b.classList.add('active');
+  $('tab-'+b.dataset.tab)?.classList.add('active');
+}));
+
+// Dropdowns da toolbar
+qsa('[data-dropdown]').forEach(btn => btn.addEventListener('click', e => {
+  e.stopPropagation();
+  const menu = $(btn.dataset.dropdown);
+  const open = menu?.classList.contains('open');
+  qsa('.tb-dropdown').forEach(m=>m.classList.remove('open'));
+  if (!open) menu?.classList.add('open');
+}));
+document.addEventListener('click', ()=>qsa('.tb-dropdown').forEach(m=>m.classList.remove('open')));

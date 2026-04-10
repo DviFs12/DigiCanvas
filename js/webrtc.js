@@ -1,277 +1,119 @@
 /**
- * webrtc.js
- * ─────────
- * Encapsula a lógica de WebRTC (RTCPeerConnection + RTCDataChannel).
- * Usa a SignalingChannel do firebase para trocar offer/answer/ICE.
+ * webrtc.js — RTCPeerConnection + RTCDataChannel
+ * Usa SignalingChannel do Firebase para trocar offer/answer/ICE.
  */
-
 import { SignalingChannel } from './signaling.js';
 
-// STUN servers públicos
-const ICE_SERVERS = [
+const ICE = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
-  { urls: 'stun:stun.cloudflare.com:3478' },
 ];
 
-// ── Estados de conexão ──────────────────────────────────────────────────────
-export const ConnState = {
-  IDLE:        'idle',
-  CONNECTING:  'connecting',
-  CONNECTED:   'connected',
-  DISCONNECTED:'disconnected',
-  ERROR:       'error',
-};
+export const CS = { IDLE:'idle', CONNECTING:'connecting', CONNECTED:'connected', DISCONNECTED:'disconnected', ERROR:'error' };
 
-// ── Classe principal ────────────────────────────────────────────────────────
-
-export class DigiPeer {
-  constructor({ role, code, onStateChange, onMessage }) {
-    this.role          = role;          // 'host' | 'guest'
-    this.code          = code;
-    this.onStateChange = onStateChange || (() => {});
-    this.onMessage     = onMessage     || (() => {});
-
-    this.state     = ConnState.IDLE;
-    this.pc        = null;
-    this.channel   = null;
-    this.signaling = null;
-
-    this._cleanupFns = [];
+export class Peer {
+  constructor({ role, code, onState, onMsg }) {
+    this.role = role; this.code = code;
+    this.onState = onState || (()=>{}); this.onMsg = onMsg || (()=>{});
+    this.state = CS.IDLE;
+    this.pc = null; this.ch = null; this.sig = null;
+    this._cleanup = [];
   }
 
-  // ── Iniciar conexão como HOST ──────────────────────────────────────────────
-
-  async startAsHost() {
-    this._setState(ConnState.CONNECTING);
-
-    this.signaling = new SignalingChannel(this.code, 'host');
-    await this.signaling.init();
-    await this.signaling.createSession();
-
+  async startHost() {
+    this._setState(CS.CONNECTING);
+    this.sig = new SignalingChannel(this.code, 'host');
+    await this.sig.init();
+    await this.sig.createSession();
     this.pc = this._createPC();
-
-    // Cria DataChannel antes de criar a offer
-    this.channel = this.pc.createDataChannel('digicanvas', {
-      ordered: false,          // permite reordenar para menor latência
-      maxRetransmits: 0,       // sem retransmissão (preferimos dados frescos)
-    });
-    this._setupDataChannel(this.channel);
-
-    // Cria e envia offer
+    this.ch = this.pc.createDataChannel('dc', { ordered: false, maxRetransmits: 0 });
+    this._setupCh(this.ch);
     const offer = await this.pc.createOffer();
     await this.pc.setLocalDescription(offer);
-    await this.signaling.sendOffer({ type: offer.type, sdp: offer.sdp });
-
-    // Espera answer
-    const stopAnswerListener = this.signaling.onAnswer(async (answerData) => {
-      if (this.pc.remoteDescription) return; // já processado
-      const answer = new RTCSessionDescription(answerData);
-      await this.pc.setRemoteDescription(answer);
-      stopAnswerListener?.();
-    });
-
-    // Ouve ICE candidates do guest
-    const stopICEListener = this.signaling.onICE(async (candidate) => {
-      try {
-        await this.pc.addIceCandidate(new RTCIceCandidate(candidate));
-      } catch (e) {
-        console.warn('[WebRTC] ICE candidate inválido:', e);
-      }
-    });
-
-    this._cleanupFns.push(stopAnswerListener, stopICEListener);
-  }
-
-  // ── Iniciar conexão como GUEST ─────────────────────────────────────────────
-
-  async startAsGuest() {
-    this._setState(ConnState.CONNECTING);
-
-    this.signaling = new SignalingChannel(this.code, 'guest');
-
-    try {
-      await this.signaling.init();
-    } catch (err) {
-      this._setState(ConnState.ERROR);
-      throw err; // erro de configuração (apiKey, databaseURL) — repassa limpo
-    }
-
-    let exists = false;
-    try {
-      exists = await this.signaling.sessionExists();
-    } catch (err) {
-      this._setState(ConnState.ERROR);
-      throw new Error('Erro ao acessar o Firebase: ' + err.message);
-    }
-
-    if (!exists) {
-      this._setState(ConnState.ERROR);
-      throw new Error(
-        `Sessão "${this.code}" não encontrada.\n` +
-        'Possíveis causas:\n' +
-        '  1. Código digitado errado\n' +
-        '  2. O computador ainda não clicou em "Gerar Código"\n' +
-        '  3. databaseURL em firebase-config.js aponta para banco diferente\n' +
-        '  4. Regras do RTDB não permitem leitura — verifique o console Firebase'
-      );
-    }
-
-    this.pc = this._createPC();
-
-    // Guest recebe DataChannel via evento
-    this.pc.ondatachannel = (event) => {
-      this.channel = event.channel;
-      this._setupDataChannel(this.channel);
-    };
-
-    // Espera e processa offer
-    const stopOfferListener = this.signaling.onOffer(async (offerData) => {
+    await this.sig.sendOffer({ type: offer.type, sdp: offer.sdp });
+    const stopAnswer = this.sig.onAnswer(async d => {
       if (this.pc.remoteDescription) return;
-
-      try {
-        const offer = new RTCSessionDescription(offerData);
-        await this.pc.setRemoteDescription(offer);
-
-        const answer = await this.pc.createAnswer();
-        await this.pc.setLocalDescription(answer);
-        await this.signaling.sendAnswer({ type: answer.type, sdp: answer.sdp });
-
-        stopOfferListener?.();
-      } catch (err) {
-        console.error('[WebRTC] Erro ao processar offer:', err);
-        this._setState(ConnState.ERROR);
-      }
+      await this.pc.setRemoteDescription(new RTCSessionDescription(d));
     });
-
-    // Ouve ICE candidates do host
-    const stopICEListener = this.signaling.onICE(async (candidate) => {
-      try {
-        await this.pc.addIceCandidate(new RTCIceCandidate(candidate));
-      } catch (e) {
-        console.warn('[WebRTC] ICE candidate inválido:', e);
-      }
+    const stopICE = this.sig.onICE(async c => {
+      try { await this.pc.addIceCandidate(new RTCIceCandidate(c)); } catch {}
     });
-
-    this._cleanupFns.push(stopOfferListener, stopICEListener);
+    this._cleanup.push(stopAnswer, stopICE);
   }
 
-  // ── Enviar mensagem ────────────────────────────────────────────────────────
+  async startGuest() {
+    this._setState(CS.CONNECTING);
+    this.sig = new SignalingChannel(this.code, 'guest');
+    try { await this.sig.init(); } catch(e) { this._setState(CS.ERROR); throw e; }
+    const ok = await this.sig.sessionExists();
+    if (!ok) {
+      this._setState(CS.ERROR);
+      throw new Error('Sessão não encontrada. Verifique o código e se o PC gerou um código.');
+    }
+    this.pc = this._createPC();
+    this.pc.ondatachannel = e => { this.ch = e.channel; this._setupCh(e.channel); };
+    const stopOffer = this.sig.onOffer(async d => {
+      if (this.pc.remoteDescription) return;
+      await this.pc.setRemoteDescription(new RTCSessionDescription(d));
+      const ans = await this.pc.createAnswer();
+      await this.pc.setLocalDescription(ans);
+      await this.sig.sendAnswer({ type: ans.type, sdp: ans.sdp });
+    });
+    const stopICE = this.sig.onICE(async c => {
+      try { await this.pc.addIceCandidate(new RTCIceCandidate(c)); } catch {}
+    });
+    this._cleanup.push(stopOffer, stopICE);
+  }
 
   send(data) {
-    if (!this.channel || this.channel.readyState !== 'open') return false;
-    try {
-      const payload = typeof data === 'string' ? data : JSON.stringify(data);
-      this.channel.send(payload);
-      return true;
-    } catch (e) {
-      console.warn('[WebRTC] Erro ao enviar:', e);
-      return false;
-    }
+    if (this.ch?.readyState !== 'open') return false;
+    try { this.ch.send(typeof data === 'string' ? data : JSON.stringify(data)); return true; }
+    catch { return false; }
   }
-
-  // ── Desconectar ────────────────────────────────────────────────────────────
 
   async disconnect() {
-    this._cleanupFns.forEach(fn => fn?.());
-    this._cleanupFns = [];
-
-    this.channel?.close();
-    this.pc?.close();
-    await this.signaling?.cleanup();
-
-    this.channel = null;
-    this.pc = null;
-    this._setState(ConnState.DISCONNECTED);
+    this._cleanup.forEach(f => { try { f?.(); } catch {} });
+    this._cleanup = [];
+    this.ch?.close(); this.pc?.close();
+    await this.sig?.cleanup();
+    this.ch = null; this.pc = null;
+    this._setState(CS.DISCONNECTED);
   }
 
-  // ── INTERNOS ────────────────────────────────────────────────────────────────
-
   _createPC() {
-    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-
-    // Timeout de 30s para conectar
+    const pc = new RTCPeerConnection({ iceServers: ICE });
     const timeout = setTimeout(() => {
-      if (this.state !== ConnState.CONNECTED) {
-        console.warn('[WebRTC] Timeout de conexão — verifique STUN/TURN');
-        this._setState(ConnState.ERROR);
-        pc.close();
-      }
-    }, 30_000);
-
+      if (this.state !== CS.CONNECTED) { this._setState(CS.ERROR); pc.close(); }
+    }, 30000);
     pc.onicecandidate = async ({ candidate }) => {
-      if (candidate) {
-        await this.signaling.sendICE({
-          candidate:     candidate.candidate,
-          sdpMid:        candidate.sdpMid,
-          sdpMLineIndex: candidate.sdpMLineIndex,
-        });
-      }
+      if (candidate) await this.sig.sendICE({
+        candidate: candidate.candidate,
+        sdpMid: candidate.sdpMid,
+        sdpMLineIndex: candidate.sdpMLineIndex,
+      });
     };
-
     pc.onconnectionstatechange = () => {
-      const s = pc.connectionState;
-      console.log('[WebRTC] connectionState:', s);
-
-      if (s === 'connected') {
-        clearTimeout(timeout);
-        this._setState(ConnState.CONNECTED);
-      }
-      if (s === 'disconnected') {
-        this._setState(ConnState.DISCONNECTED);
-      }
-      if (s === 'failed') {
-        clearTimeout(timeout);
-        console.error('[WebRTC] Conexão falhou. Tente reconectar.');
-        this._setState(ConnState.ERROR);
-      }
+      if (pc.connectionState === 'connected') { clearTimeout(timeout); this._setState(CS.CONNECTED); }
+      if (pc.connectionState === 'disconnected') this._setState(CS.DISCONNECTED);
+      if (pc.connectionState === 'failed') { clearTimeout(timeout); this._setState(CS.ERROR); }
     };
-
-    pc.onicegatheringstatechange = () => {
-      console.log('[WebRTC] iceGathering:', pc.iceGatheringState);
-    };
-
     pc.oniceconnectionstatechange = () => {
-      if (pc.iceConnectionState === 'failed') {
-        console.warn('[WebRTC] ICE falhou — tentando restart...');
-        pc.restartIce?.();
-      }
+      if (pc.iceConnectionState === 'failed') pc.restartIce?.();
     };
-
     return pc;
   }
 
-  _setupDataChannel(ch) {
-    ch.binaryType = 'arraybuffer';
-
-    ch.onopen = () => {
-      console.log('[WebRTC] DataChannel aberto');
-      this._setState(ConnState.CONNECTED);
-    };
-
-    ch.onclose = () => {
-      console.log('[WebRTC] DataChannel fechado');
-      this._setState(ConnState.DISCONNECTED);
-    };
-
-    ch.onerror = (e) => {
-      console.error('[WebRTC] DataChannel erro:', e);
-      this._setState(ConnState.ERROR);
-    };
-
+  _setupCh(ch) {
+    ch.onopen  = () => { console.log('[WebRTC] open'); this._setState(CS.CONNECTED); };
+    ch.onclose = () => this._setState(CS.DISCONNECTED);
+    ch.onerror = () => this._setState(CS.ERROR);
     ch.onmessage = ({ data }) => {
-      try {
-        const parsed = JSON.parse(data);
-        this.onMessage(parsed);
-      } catch {
-        this.onMessage(data);
-      }
+      try { this.onMsg(JSON.parse(data)); } catch { this.onMsg(data); }
     };
   }
 
-  _setState(newState) {
-    if (this.state === newState) return;
-    this.state = newState;
-    this.onStateChange(newState);
+  _setState(s) {
+    if (this.state === s) return;
+    this.state = s; this.onState(s);
   }
 }

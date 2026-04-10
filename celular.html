@@ -1,265 +1,193 @@
 <!DOCTYPE html>
 <html lang="pt-BR" data-theme="dark">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="theme-color" content="#0d0d0f" />
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+  <meta name="theme-color" content="#0d0d0f"/>
   <title>DigiCanvas</title>
-  <link rel="manifest" href="manifest.json" />
-  <link rel="icon" type="image/png" href="icons/favicon-32.png" />
-  <link rel="apple-touch-icon" href="icons/icon-192.png" />
-  <link rel="stylesheet" href="css/shared.css" />
-  <link rel="stylesheet" href="css/mobile.css" />
+  <link rel="manifest" href="manifest.json"/>
+  <link rel="icon" href="icons/favicon-32.png"/>
+  <link rel="apple-touch-icon" href="icons/icon-192.png"/>
+  <link rel="stylesheet" href="css/shared.css"/>
+  <link rel="stylesheet" href="css/mobile.css"/>
 </head>
-<body class="mobile-mode">
+<body>
 
-<!-- ══ TELA DE CONEXÃO ══ -->
+<!-- ═══ CONEXÃO ═══ -->
 <div id="screen-connect" class="screen active">
-  <div class="mobile-bg"><div class="glow-orb orb-mobile"></div></div>
+  <div class="orb orb1" style="position:fixed"></div>
   <div class="connect-content">
-    <div class="logo-mark small">
+    <div class="logo sm">
       <svg viewBox="0 0 60 60" fill="none">
-        <rect x="4" y="4" width="52" height="52" rx="8" stroke="var(--accent)" stroke-width="2"/>
-        <path d="M16 44 L28 20 L34 32 L40 24 L46 44" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
-        <circle cx="46" cy="16" r="5" fill="var(--accent2)" opacity="0.8"/>
+        <rect x="4" y="4" width="52" height="52" rx="8" stroke="var(--acc)" stroke-width="2"/>
+        <path d="M16 44 L28 20 L34 32 L40 24 L46 44" stroke="var(--acc)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="46" cy="16" r="5" fill="var(--acc2)" opacity=".8"/>
       </svg>
     </div>
     <h1>DigiCanvas</h1>
-    <p class="subtitle">Mesa digitalizadora</p>
+    <p class="sub">Mesa digitalizadora</p>
 
-    <div class="code-input-section">
-      <label class="input-label">Código da sessão (6 dígitos)</label>
+    <div class="code-section">
+      <div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:12px;font-family:var(--mono)">Código da sessão (6 dígitos)</div>
       <div class="code-inputs">
-        <input type="text" maxlength="1" class="code-char" inputmode="numeric" pattern="[0-9]" autocomplete="off" />
-        <input type="text" maxlength="1" class="code-char" inputmode="numeric" pattern="[0-9]" autocomplete="off" />
-        <input type="text" maxlength="1" class="code-char" inputmode="numeric" pattern="[0-9]" autocomplete="off" />
+        <input type="text" maxlength="1" class="code-char" inputmode="numeric" autocomplete="off"/>
+        <input type="text" maxlength="1" class="code-char" inputmode="numeric" autocomplete="off"/>
+        <input type="text" maxlength="1" class="code-char" inputmode="numeric" autocomplete="off"/>
         <span class="code-sep">–</span>
-        <input type="text" maxlength="1" class="code-char" inputmode="numeric" pattern="[0-9]" autocomplete="off" />
-        <input type="text" maxlength="1" class="code-char" inputmode="numeric" pattern="[0-9]" autocomplete="off" />
-        <input type="text" maxlength="1" class="code-char" inputmode="numeric" pattern="[0-9]" autocomplete="off" />
+        <input type="text" maxlength="1" class="code-char" inputmode="numeric" autocomplete="off"/>
+        <input type="text" maxlength="1" class="code-char" inputmode="numeric" autocomplete="off"/>
+        <input type="text" maxlength="1" class="code-char" inputmode="numeric" autocomplete="off"/>
       </div>
-      <button id="btn-connect" class="btn-primary full" disabled>
+      <button id="btn-connect" class="btn btn-pri full" disabled>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
         Conectar
       </button>
-      <div id="connect-status" class="connect-status"><span id="connect-msg"></span></div>
+      <div id="conn-status" class="conn-status"><span id="conn-msg"></span></div>
     </div>
 
     <div class="connect-note">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-      Abra <strong>index.html</strong> no PC → <strong>Gerar Código</strong>
+      Abra <strong>index.html</strong> no PC e clique em <strong>Gerar Código</strong>
     </div>
   </div>
 </div>
 
-<!-- ══ TELA DE DESENHO ══ -->
+<!-- ═══ DESENHO ═══ -->
 <div id="screen-draw" class="screen">
 
-  <!-- HUD SUPERIOR -->
-  <div id="mobile-hud">
-    <div class="hud-left">
-      <div id="mobile-status-dot" class="status-dot connected"></div>
-      <span id="mobile-status-text" class="hud-status">Conectado</span>
+  <!-- HUD -->
+  <div id="mob-hud">
+    <div class="hud-l">
+      <div id="mob-status-dot" class="dot disconnected"></div>
+      <span id="mob-status-text" class="hud-status">—</span>
     </div>
-    <div class="hud-center">
-      <span id="mobile-mode-label" class="hud-mode">Desenho</span>
+    <div class="hud-c">
+      <span id="mob-mode-label" class="hud-mode">Desenho</span>
+      <span id="mob-page-info"></span>
     </div>
-    <div class="hud-right">
-      <button id="btn-mobile-menu" class="icon-btn" aria-label="Menu">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/>
-        </svg>
+    <div class="hud-r">
+      <button id="btn-mob-menu" class="icon-btn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
       </button>
     </div>
   </div>
 
-  <!--
-    CANVAS — 5 camadas independentes (z-index crescente)
-    bg    → fundo sólido / xadrez (pointer-events: none)
-    thumb → miniatura do PDF  (pointer-events: none)
-    rem   → traços do PC      (pointer-events: none)
-    grid  → grade             (pointer-events: none)
-    draw  → traços do celular + captura de eventos
-  -->
-  <canvas id="bg-canvas"         style="position:absolute;z-index:1;pointer-events:none;left:0;"></canvas>
-  <canvas id="thumb-canvas"      style="position:absolute;z-index:2;pointer-events:none;left:0;"></canvas>
-  <canvas id="remote-canvas-mob" style="position:absolute;z-index:3;pointer-events:none;left:0;"></canvas>
-  <canvas id="grid-canvas-mob"   style="position:absolute;z-index:4;pointer-events:none;left:0;"></canvas>
-  <canvas id="mobile-canvas"     style="position:absolute;z-index:5;left:0;touch-action:none;"></canvas>
+  <!-- CANVASES (z empilhados) -->
+  <canvas id="bg-canvas"></canvas>
+  <canvas id="remote-canvas-mob"></canvas>
+  <canvas id="grid-canvas-mob"></canvas>
+  <canvas id="draw-canvas"></canvas>
 
   <!-- TOOLBAR INFERIOR -->
-  <div id="mobile-toolbar">
-
-    <!-- Linha 1: ferramentas + modo -->
-    <div class="toolbar-row tools-row">
+  <div id="mob-toolbar">
+    <!-- Ferramentas -->
+    <div class="tb-row">
       <button class="mob-tool active" data-tool="pen">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M12 19l7-7 3 3-7 7-3-3z"/>
-          <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/>
-        </svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/></svg>
         <span>Caneta</span>
       </button>
-
       <button class="mob-tool" data-tool="marker">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25z"/>
-          <path d="M20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/>
-        </svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25z"/><path d="M20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
         <span>Marcador</span>
       </button>
-
       <button class="mob-tool" data-tool="highlighter">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M9 3L5 21"/><path d="M15 3l4 18"/><path d="M3 9h18"/><path d="M3 15h18"/>
-        </svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 3L5 21"/><path d="M15 3l4 18"/><path d="M3 9h18"/><path d="M3 15h18"/></svg>
         <span>Marca-texto</span>
       </button>
-
       <button class="mob-tool" data-tool="eraser">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M20 20H7L3 16l10-10 7 7-3 4"/><path d="M7 20l4-4"/>
-        </svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 20H7L3 16l10-10 7 7-3 4"/><path d="M7 20l4-4"/></svg>
         <span>Borracha</span>
       </button>
-
-      <div class="tool-divider"></div>
-
-      <!-- Modo Navegar — 1 toque pan, 2 toques zoom -->
-      <button class="mob-tool" data-tool="pan" id="btn-pan-mode">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M5 9l-3 3 3 3M9 5l3-3 3 3M15 19l-3 3-3-3M19 9l3 3-3 3M2 12h20M12 2v20"/>
-        </svg>
+      <div class="tool-sep"></div>
+      <button class="mob-tool" data-tool="pan">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 9l-3 3 3 3M9 5l3-3 3 3M15 19l-3 3-3-3M19 9l3 3-3 3M2 12h20M12 2v20"/></svg>
         <span>Navegar</span>
       </button>
     </div>
 
-    <!-- Linha 2: cores + espessura + ações -->
-    <div class="toolbar-row options-row">
-
-      <div class="quick-colors">
-        <button class="quick-color active" data-color="#e63946" style="--c:#e63946" title="Vermelho"></button>
-        <button class="quick-color"        data-color="#4cc9f0" style="--c:#4cc9f0" title="Azul"></button>
-        <button class="quick-color"        data-color="#2dc653" style="--c:#2dc653" title="Verde"></button>
-        <button class="quick-color"        data-color="#f7c559" style="--c:#f7c559" title="Amarelo"></button>
-        <button class="quick-color"        data-color="#ffffff" style="--c:#ffffff" title="Branco"></button>
-        <button class="quick-color"        data-color="#1a1a2e" style="--c:#1a1a2e" title="Preto"></button>
-        <input type="color" id="mob-color" value="#e63946" title="Cor personalizada" />
+    <!-- Cores + espessura + ações -->
+    <div class="tb-row" style="gap:8px">
+      <div class="colors-wrap">
+        <button class="qcolor active" data-color="#e63946" style="--c:#e63946"></button>
+        <button class="qcolor"        data-color="#4cc9f0" style="--c:#4cc9f0"></button>
+        <button class="qcolor"        data-color="#2dc653" style="--c:#2dc653"></button>
+        <button class="qcolor"        data-color="#f7c559" style="--c:#f7c559"></button>
+        <button class="qcolor"        data-color="#ffffff" style="--c:#ffffff"></button>
+        <button class="qcolor"        data-color="#111122" style="--c:#111122;border:1px solid var(--bdr2)"></button>
+        <input type="color" id="mob-color" value="#e63946"/>
       </div>
-
-      <div class="options-divider"></div>
-
-      <!-- Slider de espessura -->
-      <div class="size-slider-mob">
-        <div class="size-preview-wrap">
-          <div id="size-preview-dot" class="size-preview-dot"></div>
-        </div>
-        <input type="range" id="size-slider" min="1" max="60" value="3" />
-        <span id="size-slider-label" class="size-slider-num">3</span>
+      <div class="size-wrap-mob">
+        <div class="size-dot-wrap"><div id="size-dot" style="width:6px;height:6px;background:var(--acc)"></div></div>
+        <input type="range" id="mob-size" min="1" max="100" value="3"/>
+        <span id="mob-size-label">3</span>
       </div>
-
-      <div class="options-divider"></div>
-
-      <button id="btn-mob-undo"  class="action-btn" title="Desfazer">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/>
-        </svg>
+      <button id="btn-mob-undo" class="act-btn" title="Desfazer">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg>
       </button>
-      <button id="btn-mob-clear" class="action-btn" title="Limpar meus traços">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <polyline points="3 6 5 6 21 6"/>
-          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/>
-        </svg>
+      <button id="btn-mob-clear" class="act-btn" title="Limpar">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
       </button>
-
     </div>
   </div>
 
   <!-- MENU LATERAL -->
-  <div id="mobile-menu" class="side-menu hidden">
-    <div class="menu-header">
+  <div id="mob-menu" class="hidden">
+    <div class="menu-hdr">
       <span>Configurações</span>
       <button id="btn-close-menu" class="icon-btn">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-        </svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
       </button>
     </div>
     <div class="menu-body">
-
-      <div class="menu-group">
-        <div class="menu-group-title">Desenho</div>
-        <label class="toggle-row">
-          <span>Haptic feedback</span>
-          <input type="checkbox" id="toggle-haptic" checked />
-          <span class="toggle-knob"></span>
-        </label>
-        <label class="toggle-row">
-          <span>Palm reject</span>
-          <input type="checkbox" id="toggle-palm" checked />
-          <span class="toggle-knob"></span>
-        </label>
+      <div class="menu-grp">
+        <div class="menu-grp-title">Desenho</div>
+        <label class="tog-row"><span>Haptic feedback</span><input type="checkbox" id="tog-haptic" checked/><span class="tog-knob"></span></label>
+        <label class="tog-row"><span>Palm reject</span><input type="checkbox" id="tog-palm" checked/><span class="tog-knob"></span></label>
       </div>
-
-      <div class="menu-group">
-        <div class="menu-group-title">Viewport</div>
-        <label class="toggle-row">
-          <span>🔒 Travar zoom</span>
-          <input type="checkbox" id="toggle-zoom-lock" />
-          <span class="toggle-knob"></span>
-        </label>
-        <label class="toggle-row">
-          <span>Grade de referência</span>
-          <input type="checkbox" id="toggle-grid-mob" />
-          <span class="toggle-knob"></span>
-        </label>
-        <div class="menu-field">
+      <div class="menu-grp">
+        <div class="menu-grp-title">Viewport</div>
+        <label class="tog-row"><span>🔒 Travar zoom</span><input type="checkbox" id="tog-zoom-lock"/><span class="tog-knob"></span></label>
+        <label class="tog-row"><span>Grade de referência</span><input type="checkbox" id="tog-grid"/><span class="tog-knob"></span></label>
+        <div class="menu-fld">
           <label>Sensibilidade pan</label>
-          <input type="range" id="pan-sensitivity" min="0.3" max="3" step="0.1" value="1" />
+          <input type="range" id="pan-sens" min="0.3" max="3" step="0.1" value="1"/>
         </div>
       </div>
-
-      <div class="menu-group">
-        <div class="menu-group-title">Fundo</div>
-        <select id="bg-select" class="menu-select">
+      <div class="menu-grp">
+        <div class="menu-grp-title">Fundo do canvas</div>
+        <select id="bg-select" class="menu-sel">
           <option value="pdf">PDF (miniatura)</option>
           <option value="dark">Escuro</option>
           <option value="light">Claro</option>
           <option value="amoled">AMOLED</option>
-          <option value="checkerboard">Xadrez</option>
+          <option value="grid">Grade</option>
         </select>
       </div>
-
-      <div class="menu-group">
-        <div class="menu-group-title">Tema</div>
+      <div class="menu-grp">
+        <div class="menu-grp-title">Tema</div>
         <div class="theme-grid-mob">
-          <button data-theme-btn="dark"   class="theme-option-mob active">Escuro</button>
-          <button data-theme-btn="light"  class="theme-option-mob">Claro</button>
-          <button data-theme-btn="amoled" class="theme-option-mob">AMOLED</button>
+          <button class="th-mob-btn active" data-theme="dark">Escuro</button>
+          <button class="th-mob-btn"        data-theme="light">Claro</button>
+          <button class="th-mob-btn"        data-theme="amoled">AMOLED</button>
         </div>
       </div>
-
-      <button id="btn-mob-disconnect" class="btn-danger full mt16">Desconectar</button>
+      <button id="btn-mob-disconnect" class="btn btn-danger full mt16">Desconectar</button>
     </div>
   </div>
 
 </div><!-- /screen-draw -->
 
-<script type="module" src="js/store.js"></script>
-<script type="module" src="js/state.js"></script>
-<script type="module" src="js/viewport.js"></script>
-<script type="module" src="js/renderer.js"></script>
 <script type="module" src="js/firebase-config.js"></script>
 <script type="module" src="js/signaling.js"></script>
 <script type="module" src="js/webrtc.js"></script>
-<script type="module" src="js/toast.js"></script>
+<script type="module" src="js/viewport.js"></script>
+<script type="module" src="js/utils.js"></script>
 <script type="module" src="js/mobile.js"></script>
 <script>
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./service-worker.js').catch(() => {});
-  });
+if('serviceWorker' in navigator){
+  window.addEventListener('load',()=>navigator.serviceWorker.register('./service-worker.js').catch(()=>{}));
 }
 </script>
 </body>

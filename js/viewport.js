@@ -1,116 +1,88 @@
 /**
- * viewport.js — Modelo matemático do viewport
+ * viewport.js — Modelo matemático do viewport do celular
  *
- * SISTEMA DE COORDENADAS:
- *   doc space:    px CSS do PDF (origem no canto sup-esq)
- *   norm space:   [0,1] relativo ao doc (nx = docX/docW)
- *   screen space: px CSS do canvas do celular
- *
- * INVARIANTE: o viewport NUNCA sai do documento.
- * ZOOM MÍNIMO: viewport não pode ficar maior que o documento.
- * ZOOM MÁXIMO: 20×
+ * SISTEMA: doc coords (px CSS do PDF) ↔ screen coords (px CSS do canvas)
+ * INVARIANTE: viewport nunca sai do documento.
  */
 export class Viewport {
-  constructor(docW, docH, scrW, scrH) {
+  constructor(docW = 794, docH = 1123, scrW = 400, scrH = 600) {
     this.docW = docW; this.docH = docH;
     this.scrW = scrW; this.scrH = scrH;
-    this.x = 0; this.y = 0; this.z = 1.0;
+    this.x = 0; this.y = 0; this.z = 1;
+    this._fit();
   }
 
-  setDocSize(w, h) {
+  setDoc(w, h) {
     this.docW = w; this.docH = h;
-    // Reseta viewport ao trocar de PDF
     this.x = 0; this.y = 0;
-    // Zoom "fit": encaixa o doc inteiro na tela
-    this.z = Math.min(this.scrW / this.docW, this.scrH / this.docH);
-    this.clamp();
+    this._fit();
   }
 
-  setScrSize(w, h) {
+  setScr(w, h) {
     this.scrW = w; this.scrH = h;
-    this.clamp();
+    this._fit();
+    this._clamp();
   }
 
-  // Zoom mínimo = encaixa o doc inteiro na tela (não pode ver "além" do doc)
-  get minZoom() {
-    if (this.docW <= 0 || this.docH <= 0) return 0.01;
+  get minZ() {
+    if (!this.docW || !this.docH) return 0.1;
     return Math.min(this.scrW / this.docW, this.scrH / this.docH);
   }
 
-  get maxZoom() { return 20; }
+  _fit() { this.z = this.minZ; this._clamp(); }
 
-  /** Zoom centrado em (focusX, focusY) em screen space */
-  zoomAt(newZ, focusX, focusY) {
-    const clamped = Math.max(this.minZoom, Math.min(this.maxZoom, newZ));
-    if (Math.abs(clamped - this.z) < 1e-9) return;
-    const fx = focusX ?? this.scrW / 2;
-    const fy = focusY ?? this.scrH / 2;
-    // Mantém o ponto de foco fixo na tela
-    this.x += fx / this.z - fx / clamped;
-    this.y += fy / this.z - fy / clamped;
-    this.z = clamped;
-    this.clamp();
+  _clamp() {
+    this.z = Math.max(this.minZ, Math.min(20, this.z));
+    const vw = this.scrW / this.z, vh = this.scrH / this.z;
+    this.x = vw >= this.docW ? 0 : Math.max(0, Math.min(this.x, this.docW - vw));
+    this.y = vh >= this.docH ? 0 : Math.max(0, Math.min(this.y, this.docH - vh));
   }
 
-  /** Pan em screen space */
-  panBy(dx, dy) {
+  // Zoom centrado em ponto da tela (sx, sy)
+  zoomAt(newZ, sx, sy) {
+    const cz = Math.max(this.minZ, Math.min(20, newZ));
+    if (Math.abs(cz - this.z) < 1e-6) return;
+    const fx = sx ?? this.scrW / 2;
+    const fy = sy ?? this.scrH / 2;
+    this.x += fx / this.z - fx / cz;
+    this.y += fy / this.z - fy / cz;
+    this.z = cz;
+    this._clamp();
+  }
+
+  // Pan em pixels de tela
+  pan(dx, dy) {
     this.x -= dx / this.z;
     this.y -= dy / this.z;
-    this.clamp();
+    this._clamp();
   }
 
-  moveTo(docX, docY) {
-    this.x = docX; this.y = docY;
-    this.clamp();
+  moveTo(docX, docY) { this.x = docX; this.y = docY; this._clamp(); }
+
+  // Converte px de tela para coordenadas normalizadas [0-1]
+  screenToNorm(sx, sy) {
+    return {
+      nx: (this.x + sx / this.z) / this.docW,
+      ny: (this.y + sy / this.z) / this.docH,
+    };
   }
 
-  /** INVARIANTE CENTRAL — chamado após toda operação */
-  clamp() {
-    this.z = Math.max(this.minZoom, Math.min(this.maxZoom, this.z));
-    const visW = this.scrW / this.z;
-    const visH = this.scrH / this.z;
-
-    // Se o documento cabe todo na tela, ancora em 0
-    if (visW >= this.docW) {
-      this.x = 0;
-    } else {
-      this.x = Math.max(0, Math.min(this.x, this.docW - visW));
-    }
-    if (visH >= this.docH) {
-      this.y = 0;
-    } else {
-      this.y = Math.max(0, Math.min(this.y, this.docH - visH));
-    }
-  }
-
-  // ── Conversões ────────────────────────────────────────────────────────
-
-  docToScreen(docX, docY) {
-    return { x: (docX - this.x) * this.z, y: (docY - this.y) * this.z };
-  }
-  screenToDoc(scrX, scrY) {
-    return { x: this.x + scrX / this.z, y: this.y + scrY / this.z };
-  }
-  normToDoc(nx, ny)   { return { x: nx * this.docW, y: ny * this.docH }; }
-  docToNorm(docX, docY) { return { nx: docX / this.docW, ny: docY / this.docH }; }
-
-  screenToNorm(scrX, scrY) {
-    const d = this.screenToDoc(scrX, scrY);
-    return this.docToNorm(d.x, d.y);
-  }
+  // Converte normalizado para px de tela
   normToScreen(nx, ny) {
-    const d = this.normToDoc(nx, ny);
-    return this.docToScreen(d.x, d.y);
+    return {
+      x: (nx * this.docW - this.x) * this.z,
+      y: (ny * this.docH - this.y) * this.z,
+    };
   }
 
-  toNormState() {
-    const visW = this.scrW / this.z;
-    const visH = this.scrH / this.z;
+  // Estado para enviar ao desktop
+  toMsg() {
+    const vw = this.scrW / this.z, vh = this.scrH / this.z;
     return {
       nx: this.x / this.docW,
       ny: this.y / this.docH,
-      nw: Math.min(1, visW / this.docW),
-      nh: Math.min(1, visH / this.docH),
+      nw: Math.min(1, vw / this.docW),
+      nh: Math.min(1, vh / this.docH),
       zoom: this.z,
     };
   }
